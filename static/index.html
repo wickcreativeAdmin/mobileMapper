@@ -102,6 +102,7 @@
       
       // Touch state
       const [touchStart, setTouchStart] = useState(null);
+      const [reverseScroll, setReverseScroll] = useState(false);
       
       // Refs
       const audioRef = useRef(null);
@@ -204,7 +205,8 @@
             allTempoMaps,
             notes,
             playbackRate,
-            gridSnap
+            gridSnap,
+            reverseScroll
           };
           localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(data));
           setLastSaved(new Date());
@@ -213,7 +215,7 @@
         saveData();
         const interval = setInterval(saveData, AUTOSAVE_INTERVAL);
         return () => clearInterval(interval);
-      }, [screen, songName, artistName, audioFileName, duration, currentTime, firstBeat, tempoMap, tempoMapType, allTempoMaps, notes, playbackRate, gridSnap]);
+      }, [screen, songName, artistName, audioFileName, duration, currentTime, firstBeat, tempoMap, tempoMapType, allTempoMaps, notes, playbackRate, gridSnap, reverseScroll]);
       
       const clearAutoSave = () => {
         localStorage.removeItem(AUTOSAVE_KEY);
@@ -235,7 +237,8 @@
           allTempoMaps,
           notes,
           playbackRate,
-          gridSnap
+          gridSnap,
+          reverseScroll
         };
         
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -283,6 +286,7 @@
         setNotes(data.notes || []);
         setPlaybackRate(data.playbackRate || 1.0);
         setGridSnap(data.gridSnap || HALF_BEAT);
+        setReverseScroll(data.reverseScroll || false);
         setPendingLoadData(null);
       };
       
@@ -439,10 +443,18 @@
         }
       };
       
-      // Proper seeking function that works on mobile
-      const seekTo = (time) => {
+      // Proper seeking function that works on mobile - snaps to grid
+      const seekTo = (time, shouldSnap = true) => {
         if (!audioRef.current) return;
-        const clampedTime = Math.max(0, Math.min(duration, time));
+        let targetTime = Math.max(0, Math.min(duration, time));
+        
+        // Snap to grid if requested
+        if (shouldSnap) {
+          const targetTick = timeToTick(targetTime);
+          const snappedTick = Math.round(targetTick / gridSnap) * gridSnap;
+          targetTime = tickToTime(snappedTick);
+          targetTime = Math.max(0, Math.min(duration, targetTime));
+        }
         
         // Pause first, then seek, then update state
         const wasPlaying = isPlaying;
@@ -450,8 +462,8 @@
           audioRef.current.pause();
         }
         
-        audioRef.current.currentTime = clampedTime;
-        setCurrentTime(clampedTime);
+        audioRef.current.currentTime = targetTime;
+        setCurrentTime(targetTime);
         
         // Don't auto-resume - let user control playback
       };
@@ -516,8 +528,12 @@
       const handleTouchMove = (e) => {
         if (touchStart === null) return;
         const delta = touchStart - e.touches[0].clientY;
-        if (Math.abs(delta) > 3) {
-          moveBySeconds(delta / 80);
+        // Require more movement before triggering a grid snap
+        if (Math.abs(delta) > 20) {
+          // Move by one grid unit in the swipe direction
+          let direction = delta > 0 ? 1 : -1;
+          if (reverseScroll) direction = -direction;
+          moveByGrid(direction);
           setTouchStart(e.touches[0].clientY);
         }
       };
@@ -627,18 +643,15 @@
       // Selection functions
       const setSelectionStartHere = () => {
         setSelectionStart(snapToGrid(currentTick));
-        setShowEditMenu(false);
       };
       
       const setSelectionEndHere = () => {
         setSelectionEnd(snapToGrid(currentTick));
-        setShowEditMenu(false);
       };
       
       const clearSelection = () => {
         setSelectionStart(null);
         setSelectionEnd(null);
-        setShowEditMenu(false);
       };
       
       const copySelection = () => {
@@ -653,7 +666,6 @@
           tick: n.tick - start
         }));
         setClipboard(relativized);
-        setShowEditMenu(false);
       };
       
       const pasteAtCurrent = () => {
@@ -674,7 +686,6 @@
           }
         }
         setNotes(merged.sort((a, b) => a.tick - b.tick));
-        setShowEditMenu(false);
       };
       
       const deleteSelection = () => {
@@ -1009,6 +1020,13 @@
                 className={`px-1.5 py-0.5 rounded text-xs ${gridSnap === RESOLUTION/4 ? 'bg-blue-600' : 'bg-gray-700'}`}
               >
                 ¼
+              </button>
+              <button
+                onClick={() => setReverseScroll(!reverseScroll)}
+                className={`ml-auto px-1.5 py-0.5 rounded text-xs ${reverseScroll ? 'bg-yellow-600' : 'bg-gray-700'}`}
+                title="Reverse scroll direction"
+              >
+                {reverseScroll ? '⇅' : '⇵'}
               </button>
             </div>
             
