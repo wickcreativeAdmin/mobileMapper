@@ -1,8 +1,8 @@
 setuptools==69.0.0
 flask==3.0.0
 flask-cors==4.0.0
-numpy>=1.23.0,<2.0.0
-scipy>=1.10.0,<1.14.0
+numpy==1.26.4
+scipy==1.11.4
 audioread>=3.0.0
 pydub>=0.25.0
 librosa==0.10.1
