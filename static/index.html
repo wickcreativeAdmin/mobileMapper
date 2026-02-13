@@ -986,23 +986,25 @@
             {waveformData && waveformData.length > 0 && (
               <div className="absolute inset-0 pointer-events-none z-0 flex items-center justify-center">
                 {(() => {
-                  const bpm = getCurrentBpm();
-                  const secondsPerBeat = 60 / bpm;
-                  const secondsVisible = beatsVisible * secondsPerBeat;
-                  const startTime = currentTime - secondsVisible / 2;
-                  const endTime = currentTime + secondsVisible / 2;
+                  // Use tick-based positioning to match the note grid
+                  // Calculate time range for visible ticks
+                  const startTick = currentTick - ticksVisible / 2;
+                  const endTick = currentTick + ticksVisible / 2;
+                  const startTime = tickToTime(Math.max(0, startTick));
+                  const endTime = tickToTime(endTick);
                   
-                  // Get samples in visible range
-                  const visible = waveformData.filter(w => w.time >= startTime - 0.1 && w.time <= endTime + 0.1);
+                  // Get samples in visible time range
+                  const visible = waveformData.filter(w => w.time >= startTime - 0.5 && w.time <= endTime + 0.5);
                   
                   return visible.map((sample, i) => {
-                    // Calculate Y position based on time
-                    const timeOffset = sample.time - currentTime;
-                    const yPercent = 50 - (timeOffset / (secondsVisible / 2)) * 50;
+                    // Convert sample time to tick position
+                    const sampleTick = timeToTick(sample.time);
+                    // Use same positioning as notes
+                    const yPercent = 50 - ((sampleTick - currentTick) / (ticksVisible / 2)) * 50;
                     
                     if (yPercent < -2 || yPercent > 102) return null;
                     
-                    const height = Math.max(2, sample.value * 60); // Max 60% width
+                    const width = Math.max(2, sample.value * 60); // Max 60% width
                     
                     return (
                       <div
@@ -1012,7 +1014,7 @@
                           top: `${yPercent}%`,
                           left: '50%',
                           transform: 'translate(-50%, -50%)',
-                          width: `${height}%`,
+                          width: `${width}%`,
                           height: '3px'
                         }}
                       />
