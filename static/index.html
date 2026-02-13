@@ -804,75 +804,63 @@
             </div>
           )}
           
-          {/* Edit Menu Modal */}
+          {/* Edit Toolbar - slides down, no overlay */}
           {showEditMenu && (
-            <div className="modal-overlay" onClick={() => setShowEditMenu(false)}>
-              <div className="bg-gray-800 rounded-lg p-4 m-4 w-full max-w-sm" onClick={e => e.stopPropagation()}>
-                <h2 className="text-lg font-bold mb-4">Edit</h2>
-                
-                <div className="mb-4">
-                  <p className="text-xs text-gray-400 mb-2">Selection:</p>
-                  <div className="flex gap-2 mb-2">
-                    <button onClick={setSelectionStartHere} className="flex-1 px-3 py-2 bg-gray-700 rounded text-sm">
-                      Set Start
-                    </button>
-                    <button onClick={setSelectionEndHere} className="flex-1 px-3 py-2 bg-gray-700 rounded text-sm">
-                      Set End
-                    </button>
-                  </div>
-                  {selectionStart !== null && selectionEnd !== null && (
-                    <p className="text-xs text-green-400">
-                      Selected: Beat {Math.floor(Math.min(selectionStart, selectionEnd)/RESOLUTION)} to {Math.floor(Math.max(selectionStart, selectionEnd)/RESOLUTION)}
-                    </p>
-                  )}
-                </div>
-                
-                <div className="flex gap-2 mb-2">
-                  <button 
-                    onClick={copySelection} 
-                    disabled={selectionStart === null || selectionEnd === null}
-                    className="flex-1 px-3 py-2 bg-blue-600 rounded text-sm disabled:opacity-50"
-                  >
-                    📋 Copy
-                  </button>
-                  <button 
-                    onClick={pasteAtCurrent}
-                    disabled={clipboard.length === 0}
-                    className="flex-1 px-3 py-2 bg-green-600 rounded text-sm disabled:opacity-50"
-                  >
-                    📋 Paste ({clipboard.length})
-                  </button>
-                </div>
-                
-                <div className="flex gap-2 mb-2">
-                  <button 
-                    onClick={deleteSelection}
-                    disabled={selectionStart === null || selectionEnd === null}
-                    className="flex-1 px-3 py-2 bg-red-600 rounded text-sm disabled:opacity-50"
-                  >
-                    🗑️ Delete Selection
-                  </button>
-                  <button onClick={clearSelection} className="flex-1 px-3 py-2 bg-gray-700 rounded text-sm">
-                    ✖️ Clear Selection
-                  </button>
-                </div>
-                
-                {selectionStart !== null && selectionEnd !== null && (
-                  <div className="mt-4">
-                    <p className="text-xs text-gray-400 mb-2">Nudge Selection:</p>
-                    <div className="flex gap-2">
-                      <button onClick={() => nudgeSelection(-1)} className="flex-1 px-3 py-2 bg-gray-700 rounded text-sm">
-                        ← Earlier
-                      </button>
-                      <button onClick={() => nudgeSelection(1)} className="flex-1 px-3 py-2 bg-gray-700 rounded text-sm">
-                        Later →
-                      </button>
-                    </div>
-                  </div>
-                )}
-                
-                <button onClick={() => setShowEditMenu(false)} className="w-full px-4 py-2 bg-gray-600 rounded mt-4">
-                  Close
+            <div className="bg-gray-800 border-b border-gray-700 p-2 flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <button onClick={setSelectionStartHere} className="px-2 py-1 bg-purple-700 rounded text-xs">
+                  Start
+                </button>
+                <button onClick={setSelectionEndHere} className="px-2 py-1 bg-purple-700 rounded text-xs">
+                  End
+                </button>
+                <span className="text-xs text-gray-400 flex-1 text-center">
+                  {selectionStart !== null && selectionEnd !== null 
+                    ? `Beat ${Math.floor(Math.min(selectionStart, selectionEnd)/RESOLUTION)}-${Math.floor(Math.max(selectionStart, selectionEnd)/RESOLUTION)}`
+                    : 'No selection'}
+                </span>
+                <button onClick={clearSelection} className="px-2 py-1 bg-gray-700 rounded text-xs">
+                  Clear
+                </button>
+                <button onClick={() => setShowEditMenu(false)} className="px-2 py-1 bg-gray-600 rounded text-xs">
+                  ✕
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => nudgeSelection(-1)}
+                  disabled={selectionStart === null || selectionEnd === null}
+                  className="px-2 py-1 bg-gray-700 rounded text-xs disabled:opacity-30"
+                >
+                  ← Nudge
+                </button>
+                <button 
+                  onClick={copySelection} 
+                  disabled={selectionStart === null || selectionEnd === null}
+                  className="px-2 py-1 bg-blue-600 rounded text-xs disabled:opacity-30"
+                >
+                  Copy
+                </button>
+                <button 
+                  onClick={pasteAtCurrent}
+                  disabled={clipboard.length === 0}
+                  className="px-2 py-1 bg-green-600 rounded text-xs disabled:opacity-30"
+                >
+                  Paste{clipboard.length > 0 ? ` (${clipboard.length})` : ''}
+                </button>
+                <button 
+                  onClick={deleteSelection}
+                  disabled={selectionStart === null || selectionEnd === null}
+                  className="px-2 py-1 bg-red-600 rounded text-xs disabled:opacity-30"
+                >
+                  Delete
+                </button>
+                <button 
+                  onClick={() => nudgeSelection(1)}
+                  disabled={selectionStart === null || selectionEnd === null}
+                  className="px-2 py-1 bg-gray-700 rounded text-xs disabled:opacity-30"
+                >
+                  Nudge →
                 </button>
               </div>
             </div>
