@@ -2,5 +2,7 @@ setuptools==69.0.0
 flask==3.0.0
 flask-cors==4.0.0
 numpy>=1.23.0
+audioread>=3.0.0
+pydub>=0.25.0
 librosa==0.10.1
 gunicorn==21.2.0

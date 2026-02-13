@@ -1,0 +1,3 @@
+# Add ffmpeg for audio decoding
+[phases.setup]
+aptPkgs = ["ffmpeg", "libsndfile1"]
