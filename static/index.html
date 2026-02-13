@@ -563,48 +563,45 @@
           const snapped = snapToGrid(currentTick);
           
           // Look for a note that could have a sustain at current position
-          const noteAtCurrent = notes.findIndex(n => n.lane === lane && n.tick === snapped);
+          const noteAtCurrent = notes.find(n => n.lane === lane && n.tick === snapped);
           
-          if (noteAtCurrent >= 0) {
-            // Start sustain mode from this note
+          if (noteAtCurrent) {
+            // Start sustain mode from this note - track by tick+lane, not index
             setSustainModes([...sustainModes, {
               lane,
-              startTick: notes[noteAtCurrent].tick,
-              noteIndex: noteAtCurrent,
+              noteTick: noteAtCurrent.tick,
               mode: 'extend'
             }]);
           } else {
             // Check if we're at the end of an existing sustain (to shrink it)
-            const noteWithSustainHere = notes.findIndex(n => 
+            const noteWithSustainHere = notes.find(n => 
               n.lane === lane && 
               n.duration > 0 && 
               n.tick + n.duration === snapped
             );
             
-            if (noteWithSustainHere >= 0) {
+            if (noteWithSustainHere) {
               setSustainModes([...sustainModes, {
                 lane,
-                startTick: snapped,
-                noteIndex: noteWithSustainHere,
+                noteTick: noteWithSustainHere.tick,
                 mode: 'shrink'
               }]);
             } else {
               // Check if we're inside a sustain (to truncate it)
-              const noteContainingTick = notes.findIndex(n =>
+              const noteContainingTick = notes.find(n =>
                 n.lane === lane &&
                 n.duration > 0 &&
                 n.tick < snapped &&
                 n.tick + n.duration > snapped
               );
               
-              if (noteContainingTick >= 0) {
+              if (noteContainingTick) {
                 // Truncate sustain to current position
-                const newNotes = [...notes];
-                newNotes[noteContainingTick] = {
-                  ...newNotes[noteContainingTick],
-                  duration: snapped - newNotes[noteContainingTick].tick
-                };
-                setNotes(newNotes);
+                setNotes(notes.map(n => 
+                  n.tick === noteContainingTick.tick && n.lane === lane
+                    ? { ...n, duration: snapped - n.tick }
+                    : n
+                ));
               }
             }
           }
@@ -612,39 +609,43 @@
       };
       
       // Update all active sustains when scrolling
+      const sustainModesRef = useRef(sustainModes);
+      sustainModesRef.current = sustainModes;
+      
       useEffect(() => {
         if (sustainModes.length === 0) return;
         
         const snapped = snapToGrid(currentTick);
-        let newNotes = [...notes];
-        let modesToRemove = [];
+        const currentSustainModes = sustainModesRef.current;
         
-        sustainModes.forEach((sustainMode, idx) => {
-          const note = newNotes[sustainMode.noteIndex];
-          if (!note) {
-            modesToRemove.push(idx);
-            return;
-          }
-          
-          if (sustainMode.mode === 'extend') {
+        // Check if any notes need updating
+        let needsUpdate = false;
+        for (const sustainMode of currentSustainModes) {
+          const note = notes.find(n => n.lane === sustainMode.lane && n.tick === sustainMode.noteTick);
+          if (note) {
             const newDuration = Math.max(0, snapped - note.tick);
             if (newDuration !== note.duration) {
-              newNotes[sustainMode.noteIndex] = { ...note, duration: newDuration };
-            }
-          } else if (sustainMode.mode === 'shrink') {
-            const newDuration = Math.max(0, snapped - note.tick);
-            if (newDuration !== note.duration && snapped >= note.tick) {
-              newNotes[sustainMode.noteIndex] = { ...note, duration: newDuration };
+              needsUpdate = true;
+              break;
             }
           }
-        });
-        
-        if (modesToRemove.length > 0) {
-          setSustainModes(sustainModes.filter((_, i) => !modesToRemove.includes(i)));
         }
         
+        if (!needsUpdate) return;
+        
+        const newNotes = notes.map(note => {
+          const sustainMode = currentSustainModes.find(s => s.lane === note.lane && s.noteTick === note.tick);
+          if (!sustainMode) return note;
+          
+          const newDuration = Math.max(0, snapped - note.tick);
+          if (newDuration !== note.duration) {
+            return { ...note, duration: newDuration };
+          }
+          return note;
+        });
+        
         setNotes(newNotes);
-      }, [currentTick, sustainModes.length > 0 ? currentTick : null]);
+      }, [sustainModes.length > 0 ? snapToGrid(currentTick) : null]);
       
       // Selection functions
       const setSelectionStartHere = () => {
@@ -1092,13 +1093,12 @@
           >
             {/* Waveform - behind everything */}
             {waveformData && waveformData.length > 0 && (
-              <div className="absolute inset-0 pointer-events-none z-0 flex items-center justify-center">
+              <div className="absolute inset-0 pointer-events-none z-0">
                 {(() => {
                   // Use tick-based positioning to match the note grid
-                  // Calculate time range for visible ticks
                   const startTick = currentTick - ticksVisible / 2;
                   const endTick = currentTick + ticksVisible / 2;
-                  const startTime = tickToTime(Math.max(0, startTick));
+                  const startTime = Math.max(0, tickToTime(Math.max(0, startTick)));
                   const endTime = tickToTime(endTick);
                   
                   // Get samples in visible time range
@@ -1112,17 +1112,17 @@
                     
                     if (yPercent < -2 || yPercent > 102) return null;
                     
-                    const width = Math.max(2, sample.value * 60); // Max 60% width
+                    const widthPx = Math.max(4, Math.round(sample.value * 120)); // Fixed pixel width
                     
                     return (
                       <div
-                        key={`wf-${i}`}
+                        key={`wf-${sample.time.toFixed(2)}`}
                         className="absolute bg-cyan-500 opacity-20 rounded-sm"
                         style={{
                           top: `${yPercent}%`,
                           left: '50%',
-                          transform: 'translate(-50%, -50%)',
-                          width: `${width}%`,
+                          marginLeft: `-${widthPx / 2}px`,
+                          width: `${widthPx}px`,
                           height: '3px'
                         }}
                       />
