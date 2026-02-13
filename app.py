@@ -1,9 +1,8 @@
 import os
 import tempfile
+import traceback
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-import librosa
-import numpy as np
 
 app = Flask(__name__, static_folder='static')
 CORS(app)
@@ -25,29 +24,45 @@ def analyze_audio():
     """
     Accepts an MP3 file, runs beat detection, returns tempo map.
     """
+    print("=== /analyze endpoint hit ===")
+    
     if 'file' not in request.files:
+        print("Error: No file in request")
         return jsonify({'success': False, 'error': 'No file provided'}), 400
     
     file = request.files['file']
     if file.filename == '':
+        print("Error: Empty filename")
         return jsonify({'success': False, 'error': 'No file selected'}), 400
     
-    # Save to temp file for librosa to read
-    with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp:
-        file.save(tmp.name)
-        tmp_path = tmp.name
+    print(f"Received file: {file.filename}")
     
+    # Save to temp file for librosa to read
+    tmp_path = None
     try:
-        # Load and analyze audio
+        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp:
+            file.save(tmp.name)
+            tmp_path = tmp.name
+        
+        print(f"Saved to temp file: {tmp_path}")
+        print("Importing librosa...")
+        
+        import librosa
+        import numpy as np
+        
+        print("Loading audio file...")
         y, sr = librosa.load(tmp_path, sr=None)
         duration = librosa.get_duration(y=y, sr=sr)
+        print(f"Audio loaded: {duration:.1f}s, sr={sr}")
         
         # Beat tracking
+        print("Running beat detection...")
         tempo_est, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
         beat_times = librosa.frames_to_time(beat_frames, sr=sr)
         
         # Handle numpy scalar
         tempo_est = float(tempo_est) if hasattr(tempo_est, 'item') else float(tempo_est)
+        print(f"Detected tempo: {tempo_est:.1f} BPM, {len(beat_times)} beats")
         
         if len(beat_times) < 2:
             return jsonify({
@@ -56,13 +71,12 @@ def analyze_audio():
             }), 400
         
         intervals = np.diff(beat_times)
-        beat_bpms = 60.0 / intervals
-        
         first_beat = float(beat_times[0])
         
-        # Generate tempo maps at different granularities
+        # Generate tempo maps
+        print("Generating tempo maps...")
         
-        # 1. Beat-level (most precise)
+        # Beat-level
         map_beat = []
         for i in range(len(beat_times) - 1):
             bpm = int(round(60.0 / intervals[i]))
@@ -70,7 +84,7 @@ def analyze_audio():
             if not map_beat or map_beat[-1]['bpm'] != bpm:
                 map_beat.append({'tick': tick, 'bpm': bpm})
         
-        # 2. Measure-level (every 4 beats)
+        # Measure-level
         measure_data = []
         for i in range(0, len(beat_times) - TIME_SIG, TIME_SIG):
             dur = beat_times[i + TIME_SIG] - beat_times[i]
@@ -83,7 +97,7 @@ def analyze_audio():
             if not map_measure or map_measure[-1]['bpm'] != m['bpm']:
                 map_measure.append({'tick': tick, 'bpm': m['bpm']})
         
-        # 3. Section-level (only change when tempo shifts by >2 BPM)
+        # Section-level
         map_section = []
         section_bpms = []
         section_start = 0
@@ -106,8 +120,9 @@ def analyze_audio():
                 section_start = i + 1
                 section_bpms = []
         
-        # Also return beat times for potential visualization
         beat_times_list = [float(t) for t in beat_times]
+        
+        print("Analysis complete, returning results")
         
         return jsonify({
             'success': True,
@@ -124,12 +139,15 @@ def analyze_audio():
         })
         
     except Exception as e:
+        print(f"Error during analysis: {str(e)}")
+        print(traceback.format_exc())
         return jsonify({'success': False, 'error': str(e)}), 500
     
     finally:
         # Clean up temp file
-        if os.path.exists(tmp_path):
+        if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
+            print("Cleaned up temp file")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
