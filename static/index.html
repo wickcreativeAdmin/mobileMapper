@@ -1086,14 +1086,15 @@
           
           {/* Highway */}
           <div 
-            className="flex-1 flex relative overflow-hidden touch-none"
+            className="flex-1 flex relative touch-none"
+            style={{ overflow: 'hidden', clipPath: 'inset(0)' }}
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
           >
             {/* Waveform - behind everything */}
             {waveformData && waveformData.length > 0 && (
-              <div className="absolute inset-0 pointer-events-none z-0">
+              <div className="absolute inset-0 pointer-events-none z-0 overflow-hidden">
                 {(() => {
                   // Use tick-based positioning to match the note grid
                   const startTick = currentTick - ticksVisible / 2;
@@ -1116,7 +1117,7 @@
                     
                     return (
                       <div
-                        key={`wf-${sample.time.toFixed(2)}`}
+                        key={i}
                         className="absolute bg-cyan-500 opacity-20 rounded-sm"
                         style={{
                           top: `${yPercent}%`,
@@ -1171,18 +1172,18 @@
             {LANE_COLORS.map((color, idx) => (
               <div
                 key={idx}
-                className="flex-1 relative"
+                className="flex-1 relative overflow-hidden"
                 style={{ backgroundColor: `${color}08`, borderRight: idx < 4 ? '1px solid #374151' : 'none' }}
               >
                 {visibleNotes.filter(n => n.lane === idx).map(note => {
                   const noteY = getNoteY(note.tick);
-                  const hasSustain = note.duration && note.duration > 0;
-                  const sustainEndY = hasSustain ? getNoteY(note.tick + note.duration) : noteY;
+                  const dur = note.duration || 0;
+                  const showSustain = dur > 0;
+                  const sustainEndY = showSustain ? getNoteY(note.tick + dur) : noteY;
                   
                   return (
                     <React.Fragment key={`${note.tick}-${note.lane}`}>
-                      {/* Sustain tail */}
-                      {hasSustain && (
+                      {showSustain ? (
                         <div
                           className="absolute left-1/2 w-3 rounded-sm"
                           style={{
@@ -1193,8 +1194,7 @@
                             transform: 'translateX(-50%)',
                           }}
                         />
-                      )}
-                      {/* Note head */}
+                      ) : null}
                       <div
                         className="absolute left-1/2 w-10 h-4 rounded-full"
                         style={{
@@ -1205,8 +1205,7 @@
                           border: isInSelection(note.tick) ? '2px solid white' : 'none'
                         }}
                       />
-                      {/* Sustain end cap */}
-                      {hasSustain && (
+                      {showSustain ? (
                         <div
                           className="absolute left-1/2 w-6 h-2 rounded-sm"
                           style={{
@@ -1215,7 +1214,7 @@
                             transform: 'translate(-50%, -50%)',
                           }}
                         />
-                      )}
+                      ) : null}
                     </React.Fragment>
                   );
                 })}
