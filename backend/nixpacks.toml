@@ -1,5 +1,0 @@
-[phases.setup]
-nixPkgs = ["ffmpeg", "libsndfile"]
-
-[phases.install]
-cmds = ["pip install -r requirements.txt"]
