@@ -91,6 +91,9 @@
       const [clipboard, setClipboard] = useState([]);
       const [showEditMenu, setShowEditMenu] = useState(false);
       
+      // Sustain mode state
+      const [sustainMode, setSustainMode] = useState(null); // null or { lane, startTick, noteIndex }
+      
       // Save/Load state
       const [showMenu, setShowMenu] = useState(false);
       const [lastSaved, setLastSaved] = useState(null);
@@ -528,9 +531,98 @@
         if (idx >= 0) {
           setNotes(notes.filter((_, i) => i !== idx));
         } else {
-          setNotes([...notes, { tick: snapped, lane }].sort((a, b) => a.tick - b.tick));
+          setNotes([...notes, { tick: snapped, lane, duration: 0 }].sort((a, b) => a.tick - b.tick));
         }
       };
+      
+      // Sustain functions
+      const toggleSustainMode = (lane) => {
+        if (sustainMode && sustainMode.lane === lane) {
+          // Already in sustain mode for this lane - finish it
+          setSustainMode(null);
+        } else {
+          // Find if there's a note at or before current position in this lane
+          const snapped = snapToGrid(currentTick);
+          
+          // Look for a note that could have a sustain at current position
+          // Either a note starting here, or a note with sustain passing through here
+          const noteAtCurrent = notes.findIndex(n => n.lane === lane && n.tick === snapped);
+          
+          if (noteAtCurrent >= 0) {
+            // Start sustain mode from this note
+            setSustainMode({
+              lane,
+              startTick: notes[noteAtCurrent].tick,
+              noteIndex: noteAtCurrent,
+              mode: 'extend' // extending sustain forward
+            });
+          } else {
+            // Check if we're at the end of an existing sustain (to shrink it)
+            const noteWithSustainHere = notes.findIndex(n => 
+              n.lane === lane && 
+              n.duration > 0 && 
+              n.tick + n.duration === snapped
+            );
+            
+            if (noteWithSustainHere >= 0) {
+              setSustainMode({
+                lane,
+                startTick: snapped,
+                noteIndex: noteWithSustainHere,
+                mode: 'shrink'
+              });
+            } else {
+              // Check if we're inside a sustain (to truncate it)
+              const noteContainingTick = notes.findIndex(n =>
+                n.lane === lane &&
+                n.duration > 0 &&
+                n.tick < snapped &&
+                n.tick + n.duration > snapped
+              );
+              
+              if (noteContainingTick >= 0) {
+                // Truncate sustain to current position
+                const newNotes = [...notes];
+                newNotes[noteContainingTick] = {
+                  ...newNotes[noteContainingTick],
+                  duration: snapped - newNotes[noteContainingTick].tick
+                };
+                setNotes(newNotes);
+              }
+            }
+          }
+        }
+      };
+      
+      // Update sustain when scrolling in sustain mode
+      useEffect(() => {
+        if (!sustainMode) return;
+        
+        const snapped = snapToGrid(currentTick);
+        const note = notes[sustainMode.noteIndex];
+        if (!note) {
+          setSustainMode(null);
+          return;
+        }
+        
+        if (sustainMode.mode === 'extend') {
+          // Extending: duration = current position - note start
+          const newDuration = Math.max(0, snapped - note.tick);
+          if (newDuration !== note.duration) {
+            const newNotes = [...notes];
+            newNotes[sustainMode.noteIndex] = { ...note, duration: newDuration };
+            setNotes(newNotes);
+          }
+        } else if (sustainMode.mode === 'shrink') {
+          // Shrinking: we're moving backward from the end
+          const newDuration = Math.max(0, snapped - note.tick);
+          if (newDuration !== note.duration && snapped >= note.tick) {
+            const newNotes = [...notes];
+            newNotes[sustainMode.noteIndex] = { ...note, duration: newDuration };
+            setNotes(newNotes);
+          }
+        }
+      }, [currentTick, sustainMode]);
       
       // Selection functions
       const setSelectionStartHere = () => {
@@ -613,8 +705,12 @@
       };
       
       const visibleNotes = notes.filter(n => {
-        const diff = n.tick - currentTick;
-        return diff >= -ticksVisible/2 && diff <= ticksVisible/2;
+        const noteStart = n.tick;
+        const noteEnd = n.tick + (n.duration || 0);
+        const viewStart = currentTick - ticksVisible/2;
+        const viewEnd = currentTick + ticksVisible/2;
+        // Note is visible if any part of it (including sustain) is in view
+        return noteEnd >= viewStart && noteStart <= viewEnd;
       });
       
       const getNoteY = (tick) => 50 - ((tick - currentTick) / (ticksVisible / 2)) * 50;
@@ -648,7 +744,7 @@
           '}',
           '[Events]', '{', '}',
           '[ExpertSingle]', '{',
-          ...notes.map(n => `  ${n.tick} = N ${n.lane} 0`),
+          ...notes.map(n => `  ${n.tick} = N ${n.lane} ${n.duration || 0}`),
           '}'
         ];
         
@@ -1054,19 +1150,51 @@
                 className="flex-1 relative"
                 style={{ backgroundColor: `${color}08`, borderRight: idx < 4 ? '1px solid #374151' : 'none' }}
               >
-                {visibleNotes.filter(n => n.lane === idx).map(note => (
-                  <div
-                    key={`${note.tick}-${note.lane}`}
-                    className="absolute left-1/2 w-10 h-4 rounded-full"
-                    style={{
-                      backgroundColor: color,
-                      top: `${getNoteY(note.tick)}%`,
-                      transform: 'translate(-50%, -50%)',
-                      boxShadow: `0 0 8px ${color}`,
-                      border: isInSelection(note.tick) ? '2px solid white' : 'none'
-                    }}
-                  />
-                ))}
+                {visibleNotes.filter(n => n.lane === idx).map(note => {
+                  const noteY = getNoteY(note.tick);
+                  const hasSustain = note.duration && note.duration > 0;
+                  const sustainEndY = hasSustain ? getNoteY(note.tick + note.duration) : noteY;
+                  
+                  return (
+                    <React.Fragment key={`${note.tick}-${note.lane}`}>
+                      {/* Sustain tail */}
+                      {hasSustain && (
+                        <div
+                          className="absolute left-1/2 w-3 rounded-sm"
+                          style={{
+                            backgroundColor: color,
+                            opacity: 0.7,
+                            top: `${Math.min(noteY, sustainEndY)}%`,
+                            height: `${Math.abs(noteY - sustainEndY)}%`,
+                            transform: 'translateX(-50%)',
+                          }}
+                        />
+                      )}
+                      {/* Note head */}
+                      <div
+                        className="absolute left-1/2 w-10 h-4 rounded-full"
+                        style={{
+                          backgroundColor: color,
+                          top: `${noteY}%`,
+                          transform: 'translate(-50%, -50%)',
+                          boxShadow: `0 0 8px ${color}`,
+                          border: isInSelection(note.tick) ? '2px solid white' : 'none'
+                        }}
+                      />
+                      {/* Sustain end cap */}
+                      {hasSustain && (
+                        <div
+                          className="absolute left-1/2 w-6 h-2 rounded-sm"
+                          style={{
+                            backgroundColor: color,
+                            top: `${sustainEndY}%`,
+                            transform: 'translate(-50%, -50%)',
+                          }}
+                        />
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </div>
             ))}
             
@@ -1080,21 +1208,36 @@
           {/* Note count + selection info */}
           <div className="bg-gray-800 py-1 text-center flex-shrink-0 flex justify-center gap-4">
             <span className="text-xs text-gray-400">{notes.length} notes</span>
+            {sustainMode && <span className="text-xs text-yellow-400">SUSTAIN: {LANE_LABELS[sustainMode.lane]}</span>}
             {clipboard.length > 0 && <span className="text-xs text-purple-400">📋 {clipboard.length}</span>}
             {lastSaved && <span className="text-xs text-gray-600">saved {lastSaved.toLocaleTimeString()}</span>}
           </div>
           
           {/* Lane buttons */}
-          <div className="flex h-16 flex-shrink-0">
+          <div className="flex h-20 flex-shrink-0">
             {LANE_COLORS.map((color, idx) => (
-              <button
-                key={idx}
-                className="flex-1 flex items-center justify-center text-2xl font-bold active:brightness-75"
-                style={{ backgroundColor: color, boxShadow: 'inset 0 -4px 8px rgba(0,0,0,0.3)' }}
-                onClick={() => toggleNoteAtCurrent(idx)}
-              >
-                {LANE_LABELS[idx]}
-              </button>
+              <div key={idx} className="flex-1 flex flex-col">
+                {/* Main note button */}
+                <button
+                  className="flex-1 flex items-center justify-center text-2xl font-bold active:brightness-75"
+                  style={{ backgroundColor: color, boxShadow: 'inset 0 -2px 4px rgba(0,0,0,0.3)' }}
+                  onClick={() => toggleNoteAtCurrent(idx)}
+                >
+                  {LANE_LABELS[idx]}
+                </button>
+                {/* Sustain zone */}
+                <button
+                  className="h-5 flex items-center justify-center text-xs font-bold active:brightness-75"
+                  style={{ 
+                    backgroundColor: sustainMode?.lane === idx ? '#fff' : `${color}99`,
+                    color: sustainMode?.lane === idx ? color : '#fff',
+                    boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.4)'
+                  }}
+                  onClick={() => toggleSustainMode(idx)}
+                >
+                  {sustainMode?.lane === idx ? '●' : '―'}
+                </button>
+              </div>
             ))}
           </div>
         </div>
