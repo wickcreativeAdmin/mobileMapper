@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <title>ChartMaker</title>
+  <title>Mobile Mapper</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -524,6 +524,47 @@
         seekTo(newTime);
       };
       
+      // Handle clicking on progress bar to seek
+      const handleProgressBarClick = (e) => {
+        if (!audioRef.current || duration === 0) return;
+        const rect = e.currentTarget.getBoundingClientRect();
+        const clickX = e.clientX - rect.left;
+        const percent = clickX / rect.width;
+        const newTime = percent * duration;
+        seekTo(newTime, true);
+      };
+      
+      // Calculate which regions of the song have notes (for progress bar visualization)
+      const getNoteRegions = useCallback(() => {
+        if (notes.length === 0 || duration === 0) return [];
+        
+        // Divide song into 50 segments
+        const segments = 50;
+        const segmentDuration = duration / segments;
+        const regions = [];
+        
+        for (let i = 0; i < segments; i++) {
+          const segStart = i * segmentDuration;
+          const segEnd = (i + 1) * segmentDuration;
+          const segStartTick = timeToTick(segStart);
+          const segEndTick = timeToTick(segEnd);
+          
+          // Check if any notes fall within this segment
+          const hasNotes = notes.some(n => {
+            const noteEnd = n.tick + (n.duration || 0);
+            return n.tick <= segEndTick && noteEnd >= segStartTick;
+          });
+          
+          if (hasNotes) {
+            regions.push({ start: (i / segments) * 100, width: (1 / segments) * 100 });
+          }
+        }
+        
+        return regions;
+      }, [notes, duration, timeToTick]);
+      
+      const noteRegions = getNoteRegions();
+      
       const handleTouchStart = (e) => setTouchStart(e.touches[0].clientY);
       const handleTouchMove = (e) => {
         if (touchStart === null) return;
@@ -811,7 +852,7 @@
       if (screen === 'upload') {
         return (
           <div className="h-full bg-gray-900 flex flex-col items-center justify-center p-6 text-white">
-            <h1 className="text-3xl font-bold mb-2">ChartMaker</h1>
+            <h1 className="text-3xl font-bold mb-2">Mobile Mapper</h1>
             <p className="text-gray-400 mb-8 text-center">Auto tempo detection + mobile charting for Clone Hero</p>
             
             <label className="px-8 py-4 bg-blue-600 rounded-lg text-xl cursor-pointer active:bg-blue-700 mb-4">
@@ -1061,15 +1102,30 @@
             {/* Row 4: Time + progress */}
             <div className="flex items-center gap-2">
               <span className="font-mono text-sm w-10">{formatTime(currentTime)}</span>
-              <div className="flex-1 h-2 bg-gray-700 rounded overflow-hidden relative">
-                {/* Progress */}
+              <div 
+                className="flex-1 h-4 bg-gray-700 rounded overflow-hidden relative cursor-pointer"
+                onClick={handleProgressBarClick}
+              >
+                {/* Note regions - show where notes exist */}
+                {noteRegions.map((region, i) => (
+                  <div
+                    key={i}
+                    className="absolute top-0 bottom-0 bg-green-600 opacity-60"
+                    style={{ left: `${region.start}%`, width: `${region.width}%` }}
+                  />
+                ))}
+                {/* Progress overlay */}
                 <div 
-                  className="absolute top-0 bottom-0 left-0 bg-blue-500"
+                  className="absolute top-0 bottom-0 left-0 bg-blue-500 opacity-50"
                   style={{ width: `${progressPercent}%` }}
+                />
+                {/* Playhead line */}
+                <div 
+                  className="absolute top-0 bottom-0 w-0.5 bg-white"
+                  style={{ left: `${progressPercent}%` }}
                 />
               </div>
               <span className="font-mono text-sm w-10 text-right">{formatTime(duration)}</span>
-              <span className="text-xs text-gray-400">{progressPercent.toFixed(0)}%</span>
             </div>
             
             {/* Row 5: Navigation */}
