@@ -105,7 +105,7 @@
       const animationRef = useRef(null);
       const canvasRef = useRef(null);
       
-      // Generate waveform from audio
+      // Generate waveform from audio - higher resolution for highway display
       const generateWaveform = async (file) => {
         try {
           const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -113,27 +113,56 @@
           const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
           
           const rawData = audioBuffer.getChannelData(0);
-          const samples = 500; // Number of bars in waveform
-          const blockSize = Math.floor(rawData.length / samples);
+          const sampleRate = audioBuffer.sampleRate;
+          const audioDuration = audioBuffer.duration;
+          
+          // Generate waveform data at ~100 samples per second for smooth scrolling
+          const samplesPerSecond = 100;
+          const totalSamples = Math.floor(audioDuration * samplesPerSecond);
+          const blockSize = Math.floor(rawData.length / totalSamples);
           const waveform = [];
           
-          for (let i = 0; i < samples; i++) {
+          for (let i = 0; i < totalSamples; i++) {
             let sum = 0;
-            for (let j = 0; j < blockSize; j++) {
-              sum += Math.abs(rawData[i * blockSize + j]);
+            const startIdx = i * blockSize;
+            for (let j = 0; j < blockSize && (startIdx + j) < rawData.length; j++) {
+              sum += Math.abs(rawData[startIdx + j]);
             }
-            waveform.push(sum / blockSize);
+            waveform.push({
+              time: i / samplesPerSecond,
+              value: sum / blockSize
+            });
           }
           
           // Normalize
-          const max = Math.max(...waveform);
-          const normalized = waveform.map(v => v / max);
+          const max = Math.max(...waveform.map(w => w.value));
+          const normalized = waveform.map(w => ({
+            time: w.time,
+            value: max > 0 ? w.value / max : 0
+          }));
+          
           setWaveformData(normalized);
           audioContext.close();
         } catch (err) {
           console.error('Waveform generation failed:', err);
         }
       };
+      
+      // Get visible waveform samples for the current view
+      const getVisibleWaveform = useCallback(() => {
+        if (!waveformData || waveformData.length === 0) return [];
+        
+        // Calculate time range visible on highway
+        const centerTime = currentTime;
+        const bpm = getCurrentBpm();
+        const secondsPerBeat = 60 / bpm;
+        const secondsVisible = beatsVisible * secondsPerBeat;
+        const startTime = centerTime - secondsVisible / 2;
+        const endTime = centerTime + secondsVisible / 2;
+        
+        // Filter waveform samples in visible range
+        return waveformData.filter(w => w.time >= startTime && w.time <= endTime);
+      }, [waveformData, currentTime, beatsVisible]);
       
       // Check for auto-save on mount
       useEffect(() => {
@@ -246,7 +275,7 @@
         setCurrentTime(data.currentTime || 0);
         setFirstBeat(data.firstBeat || 0);
         setTempoMap(data.tempoMap || [{ tick: 0, bpm: 120 }]);
-        setTempoMapType(data.tempoMapType || 'measure');
+        setTempoMapType(data.tempoMapType || 'beat');
         setAllTempoMaps(data.allTempoMaps || null);
         setNotes(data.notes || []);
         setPlaybackRate(data.playbackRate || 1.0);
@@ -380,8 +409,8 @@
           setAllTempoMaps(data.tempoMaps);
           setFirstBeat(data.firstBeat || 0);
           setDuration(data.duration);
-          setTempoMap(data.tempoMaps.measure);
-          setTempoMapType('measure');
+          setTempoMap(data.tempoMaps.beat);
+          setTempoMapType('beat');
           setNotes([]);
           setCurrentTime(0);
           
@@ -404,10 +433,24 @@
         setAudioReady(true);
         if (audioRef.current) {
           audioRef.current.playbackRate = playbackRate;
-          if (currentTime > 0 && currentTime < duration) {
-            audioRef.current.currentTime = currentTime;
-          }
         }
+      };
+      
+      // Proper seeking function that works on mobile
+      const seekTo = (time) => {
+        if (!audioRef.current) return;
+        const clampedTime = Math.max(0, Math.min(duration, time));
+        
+        // Pause first, then seek, then update state
+        const wasPlaying = isPlaying;
+        if (wasPlaying) {
+          audioRef.current.pause();
+        }
+        
+        audioRef.current.currentTime = clampedTime;
+        setCurrentTime(clampedTime);
+        
+        // Don't auto-resume - let user control playback
       };
       
       const updateTime = useCallback(() => {
@@ -427,6 +470,11 @@
           setIsPlaying(false);
         } else {
           try {
+            // Ensure we're at the right position before playing
+            if (Math.abs(audioRef.current.currentTime - currentTime) > 0.1) {
+              audioRef.current.currentTime = currentTime;
+            }
+            audioRef.current.playbackRate = playbackRate;
             await audioRef.current.play();
             setIsPlaying(true);
           } catch (err) {
@@ -445,23 +493,20 @@
         if (!audioRef.current || duration === 0) return;
         const target = Math.max(0, currentTick + (num * gridSnap));
         const newTime = Math.max(0, Math.min(duration, tickToTime(target)));
-        audioRef.current.currentTime = newTime;
-        setCurrentTime(newTime);
+        seekTo(newTime);
       };
       
       const moveByBeats = (num) => {
         if (!audioRef.current || duration === 0) return;
         const target = Math.max(0, currentTick + (num * RESOLUTION));
         const newTime = Math.max(0, Math.min(duration, tickToTime(target)));
-        audioRef.current.currentTime = newTime;
-        setCurrentTime(newTime);
+        seekTo(newTime);
       };
       
       const moveBySeconds = (sec) => {
         if (!audioRef.current || duration === 0) return;
         const newTime = Math.max(0, Math.min(duration, currentTime + sec));
-        audioRef.current.currentTime = newTime;
-        setCurrentTime(newTime);
+        seekTo(newTime);
       };
       
       const handleTouchStart = (e) => setTouchStart(e.touches[0].clientY);
@@ -704,6 +749,18 @@
               onEnded={() => setIsPlaying(false)}
               onPause={() => setIsPlaying(false)}
               onPlay={() => setIsPlaying(true)}
+              onSeeked={() => {
+                // Update our state when seek completes
+                if (audioRef.current) {
+                  setCurrentTime(audioRef.current.currentTime);
+                }
+              }}
+              onTimeUpdate={() => {
+                // Backup time sync when playing
+                if (isPlaying && audioRef.current) {
+                  setCurrentTime(audioRef.current.currentTime);
+                }
+              }}
               preload="auto"
               playsInline
             />
@@ -892,37 +949,18 @@
               <span className="text-sm text-yellow-400 ml-auto">{currentBpm} BPM</span>
             </div>
             
-            {/* Row 4: Time + waveform */}
+            {/* Row 4: Time + progress */}
             <div className="flex items-center gap-2">
               <span className="font-mono text-sm w-10">{formatTime(currentTime)}</span>
-              <div className="flex-1 h-6 bg-gray-700 rounded overflow-hidden relative">
-                {/* Waveform */}
-                {waveformData && (
-                  <div className="absolute inset-0 flex items-center">
-                    {waveformData.map((v, i) => (
-                      <div
-                        key={i}
-                        className="flex-1 bg-blue-400 opacity-50"
-                        style={{ 
-                          height: `${v * 100}%`,
-                          minWidth: '1px'
-                        }}
-                      />
-                    ))}
-                  </div>
-                )}
-                {/* Progress overlay */}
+              <div className="flex-1 h-2 bg-gray-700 rounded overflow-hidden relative">
+                {/* Progress */}
                 <div 
-                  className="absolute top-0 bottom-0 left-0 bg-blue-500 opacity-30"
+                  className="absolute top-0 bottom-0 left-0 bg-blue-500"
                   style={{ width: `${progressPercent}%` }}
-                />
-                {/* Playhead */}
-                <div 
-                  className="absolute top-0 bottom-0 w-0.5 bg-white"
-                  style={{ left: `${progressPercent}%` }}
                 />
               </div>
               <span className="font-mono text-sm w-10 text-right">{formatTime(duration)}</span>
+              <span className="text-xs text-gray-400">{progressPercent.toFixed(0)}%</span>
             </div>
             
             {/* Row 5: Navigation */}
@@ -944,6 +982,46 @@
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
           >
+            {/* Waveform - behind everything */}
+            {waveformData && waveformData.length > 0 && (
+              <div className="absolute inset-0 pointer-events-none z-0 flex items-center justify-center">
+                {(() => {
+                  const bpm = getCurrentBpm();
+                  const secondsPerBeat = 60 / bpm;
+                  const secondsVisible = beatsVisible * secondsPerBeat;
+                  const startTime = currentTime - secondsVisible / 2;
+                  const endTime = currentTime + secondsVisible / 2;
+                  
+                  // Get samples in visible range
+                  const visible = waveformData.filter(w => w.time >= startTime - 0.1 && w.time <= endTime + 0.1);
+                  
+                  return visible.map((sample, i) => {
+                    // Calculate Y position based on time
+                    const timeOffset = sample.time - currentTime;
+                    const yPercent = 50 - (timeOffset / (secondsVisible / 2)) * 50;
+                    
+                    if (yPercent < -2 || yPercent > 102) return null;
+                    
+                    const height = Math.max(2, sample.value * 60); // Max 60% width
+                    
+                    return (
+                      <div
+                        key={`wf-${i}`}
+                        className="absolute bg-cyan-500 opacity-20 rounded-sm"
+                        style={{
+                          top: `${yPercent}%`,
+                          left: '50%',
+                          transform: 'translate(-50%, -50%)',
+                          width: `${height}%`,
+                          height: '3px'
+                        }}
+                      />
+                    );
+                  });
+                })()}
+              </div>
+            )}
+            
             {/* Selection highlight */}
             {selectionStart !== null && selectionEnd !== null && (
               <div 
