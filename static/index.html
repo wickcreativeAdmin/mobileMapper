@@ -28,17 +28,55 @@
       justify-content: center;
       align-items: stretch;
     }
+    /* Mobile layout */
     .app-container {
       width: 100%;
       max-width: 430px;
       height: 100%;
       background: #111827;
       box-shadow: 0 0 40px rgba(0,0,0,0.8);
+      display: flex;
+      flex-direction: column;
     }
-    @media (min-width: 500px) {
+    .side-panel {
+      display: none;
+    }
+    /* Desktop layout */
+    @media (min-width: 900px) {
+      .app-wrapper {
+        display: flex;
+        width: 100%;
+        max-width: 1200px;
+        height: 100%;
+      }
+      .side-panel {
+        display: flex;
+        flex-direction: column;
+        width: 280px;
+        background: #1f2937;
+        border-right: 1px solid #374151;
+        overflow-y: auto;
+        flex-shrink: 0;
+      }
+      .side-panel-right {
+        border-right: none;
+        border-left: 1px solid #374151;
+      }
       .app-container {
+        max-width: 430px;
         border-left: 1px solid #374151;
         border-right: 1px solid #374151;
+      }
+      .mobile-only {
+        display: none !important;
+      }
+      .desktop-only {
+        display: block !important;
+      }
+    }
+    @media (max-width: 899px) {
+      .desktop-only {
+        display: none !important;
       }
     }
     input[type="number"]::-webkit-inner-spin-button,
@@ -55,6 +93,17 @@
       align-items: center;
       justify-content: center;
       z-index: 100;
+    }
+    .shortcut-key {
+      display: inline-block;
+      background: #374151;
+      border: 1px solid #4b5563;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-family: monospace;
+      font-size: 11px;
+      min-width: 24px;
+      text-align: center;
     }
   </style>
 </head>
@@ -148,9 +197,16 @@
       const [showMenu, setShowMenu] = useState(false);
       const [showMetaEditor, setShowMetaEditor] = useState(false);
       const [showAddChart, setShowAddChart] = useState(false);
+      const [showLyrics, setShowLyrics] = useState(false);
       const [lastSaved, setLastSaved] = useState(null);
       const [hasAutoSave, setHasAutoSave] = useState(false);
       const [pendingLoadData, setPendingLoadData] = useState(null);
+      
+      // Lyrics state
+      const [lyrics, setLyrics] = useState([]);  // Array of {time, text}
+      const [lyricsSearching, setLyricsSearching] = useState(false);
+      const [lyricsOffset, setLyricsOffset] = useState(0);  // Offset in seconds
+      const [lyricsError, setLyricsError] = useState(null);
       
       // Touch state
       const [touchStart, setTouchStart] = useState(null);
@@ -200,6 +256,119 @@
           osc.stop(ctx.currentTime + 0.08);
         } catch (e) { console.error('Clap error:', e); }
       }, [noteClap]);
+      
+      // Keyboard shortcuts (desktop)
+      useEffect(() => {
+        if (screen !== 'chart') return;
+        
+        const handleKeyDown = (e) => {
+          // Don't trigger if typing in an input
+          if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+          
+          const key = e.key.toLowerCase();
+          
+          // Note placement: 1-5 or G-R-Y-B-O
+          const noteKeys = { '1': 0, '2': 1, '3': 2, '4': 3, '5': 4, 'g': 0, 'r': 1, 'y': 2, 'b': 3, 'o': 4 };
+          if (noteKeys.hasOwnProperty(key)) {
+            e.preventDefault();
+            if (e.shiftKey) {
+              toggleSustainMode(noteKeys[key]);
+            } else {
+              toggleNoteAtCurrent(noteKeys[key]);
+            }
+            return;
+          }
+          
+          // Open note (guitar/bass only)
+          if (key === '0' || key === '`') {
+            e.preventDefault();
+            if (instrumentConfig.hasOpen) {
+              if (e.shiftKey) {
+                toggleSustainMode(0, true);
+              } else {
+                toggleOpenNote();
+              }
+            }
+            return;
+          }
+          
+          // Playback
+          if (key === ' ') {
+            e.preventDefault();
+            togglePlay();
+            return;
+          }
+          
+          // Navigation
+          if (key === 'arrowup' || key === 'w') {
+            e.preventDefault();
+            moveByGrid(e.shiftKey ? 4 : 1);
+            return;
+          }
+          if (key === 'arrowdown' || key === 's') {
+            e.preventDefault();
+            moveByGrid(e.shiftKey ? -4 : -1);
+            return;
+          }
+          if (key === 'arrowleft' || key === 'a') {
+            e.preventDefault();
+            moveByBeats(-1);
+            return;
+          }
+          if (key === 'arrowright' || key === 'd') {
+            e.preventDefault();
+            moveByBeats(1);
+            return;
+          }
+          
+          // Pro mode toggles
+          if (key === 't') {
+            e.preventDefault();
+            setTapMode(!tapMode);
+            return;
+          }
+          if (key === 'f') {
+            e.preventDefault();
+            setForceMode(!forceMode);
+            return;
+          }
+          
+          // Grid snap
+          if (key === 'q') {
+            e.preventDefault();
+            setGridSnap(RESOLUTION);
+            return;
+          }
+          if (key === 'e') {
+            e.preventDefault();
+            setGridSnap(HALF_BEAT);
+            return;
+          }
+          
+          // Undo placeholder - could implement undo stack later
+          if (e.ctrlKey && key === 'z') {
+            e.preventDefault();
+            // TODO: implement undo
+            return;
+          }
+          
+          // Copy/Paste
+          if (e.ctrlKey && key === 'c') {
+            e.preventDefault();
+            copySelection();
+            return;
+          }
+          if (e.ctrlKey && key === 'v') {
+            e.preventDefault();
+            pasteAtCurrent();
+            return;
+          }
+        };
+        
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+      }, [screen, toggleNoteAtCurrent, toggleSustainMode, toggleOpenNote, togglePlay, 
+          moveByGrid, moveByBeats, tapMode, forceMode, instrumentConfig, copySelection, pasteAtCurrent]);
       
       // Generate waveform from audio - higher resolution for highway display
       const generateWaveform = async (file) => {
@@ -284,14 +453,15 @@
         
         const saveData = () => {
           const data = {
-            version: 3,
+            version: 4,
             savedAt: new Date().toISOString(),
             songName, artistName, album, year, genre, charter,
             previewStart, previewEnd,
             audioFileName, duration, currentTime, firstBeat,
             tempoMap, tempoMapType, allTempoMaps,
             charts, currentInstrument, currentDifficulty,
-            playbackRate, gridSnap, reverseScroll, proMode, noteClap
+            playbackRate, gridSnap, reverseScroll, proMode, noteClap,
+            lyrics, lyricsOffset
           };
           localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(data));
           setLastSaved(new Date());
@@ -302,7 +472,8 @@
         return () => clearInterval(interval);
       }, [screen, songName, artistName, album, year, genre, charter, previewStart, previewEnd,
           audioFileName, duration, currentTime, firstBeat, tempoMap, tempoMapType, allTempoMaps,
-          charts, currentInstrument, currentDifficulty, playbackRate, gridSnap, reverseScroll, proMode, noteClap]);
+          charts, currentInstrument, currentDifficulty, playbackRate, gridSnap, reverseScroll, proMode, noteClap,
+          lyrics, lyricsOffset]);
       
       const clearAutoSave = () => {
         localStorage.removeItem(AUTOSAVE_KEY);
@@ -311,14 +482,15 @@
       
       const saveProgress = () => {
         const data = {
-          version: 3,
+          version: 4,
           savedAt: new Date().toISOString(),
           songName, artistName, album, year, genre, charter,
           previewStart, previewEnd,
           audioFileName, duration, currentTime, firstBeat,
           tempoMap, tempoMapType, allTempoMaps,
           charts, currentInstrument, currentDifficulty,
-          playbackRate, gridSnap, reverseScroll, proMode, noteClap
+          playbackRate, gridSnap, reverseScroll, proMode, noteClap,
+          lyrics, lyricsOffset
         };
         
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -384,6 +556,8 @@
         setReverseScroll(data.reverseScroll || false);
         setProMode(data.proMode || false);
         setNoteClap(data.noteClap || 'off');
+        setLyrics(data.lyrics || []);
+        setLyricsOffset(data.lyricsOffset || 0);
         setPendingLoadData(null);
       };
       
@@ -949,6 +1123,113 @@
         alert('First beat set to 3 seconds. Make sure your audio file has at least 3 seconds of silence at the start, or add it using an audio editor.');
       };
       
+      // Lyrics functions
+      const searchLyrics = async () => {
+        if (!artistName || !songName) {
+          setLyricsError('Need artist and song name to search');
+          return;
+        }
+        
+        setLyricsSearching(true);
+        setLyricsError(null);
+        
+        try {
+          const response = await fetch(
+            `${API_URL}/lyrics/search?artist=${encodeURIComponent(artistName)}&title=${encodeURIComponent(songName)}`
+          );
+          const data = await response.json();
+          
+          if (data.success && data.lines) {
+            // Convert plain lyrics to timed format (user will need to sync)
+            const timedLyrics = data.lines.map((text, i) => ({
+              time: null,  // No timing yet
+              text: text,
+              synced: false
+            }));
+            setLyrics(timedLyrics);
+            setLyricsError(null);
+          } else {
+            setLyricsError(data.error || 'No lyrics found');
+          }
+        } catch (err) {
+          setLyricsError('Failed to search lyrics: ' + err.message);
+        } finally {
+          setLyricsSearching(false);
+        }
+      };
+      
+      const parseLrcLyrics = async (lrcText) => {
+        try {
+          const response = await fetch(`${API_URL}/lyrics/parse`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lrc: lrcText })
+          });
+          const data = await response.json();
+          
+          if (data.success && data.lines) {
+            const timedLyrics = data.lines.map(line => ({
+              time: line.time,
+              text: line.text,
+              synced: true
+            }));
+            setLyrics(timedLyrics);
+            setLyricsError(null);
+          } else {
+            setLyricsError(data.error || 'Failed to parse LRC');
+          }
+        } catch (err) {
+          setLyricsError('Failed to parse LRC: ' + err.message);
+        }
+      };
+      
+      const syncLyricLine = (index) => {
+        // Set the current lyric line to the current time
+        setLyrics(prev => prev.map((line, i) => 
+          i === index ? { ...line, time: currentTime + lyricsOffset, synced: true } : line
+        ));
+      };
+      
+      const clearLyricTiming = (index) => {
+        setLyrics(prev => prev.map((line, i) => 
+          i === index ? { ...line, time: null, synced: false } : line
+        ));
+      };
+      
+      const autoSyncLyrics = () => {
+        // Simple auto-sync: distribute lyrics evenly across the song
+        if (lyrics.length === 0 || duration === 0) return;
+        
+        const startTime = firstBeat + lyricsOffset;
+        const endTime = duration - 5;  // Leave some buffer at end
+        const interval = (endTime - startTime) / lyrics.length;
+        
+        setLyrics(prev => prev.map((line, i) => ({
+          ...line,
+          time: startTime + (i * interval),
+          synced: true
+        })));
+      };
+      
+      const getLyricAtTime = (time) => {
+        const adjusted = time - lyricsOffset;
+        const synced = lyrics.filter(l => l.synced && l.time !== null);
+        if (synced.length === 0) return null;
+        
+        // Find the most recent lyric
+        let current = null;
+        for (const line of synced) {
+          if (line.time <= adjusted) {
+            current = line;
+          } else {
+            break;
+          }
+        }
+        return current;
+      };
+      
+      const currentLyric = getLyricAtTime(currentTime);
+      
       const exportChart = () => {
         const lines = [
           '[Song]', '{',
@@ -970,9 +1251,22 @@
           '[SyncTrack]', '{',
           '  0 = TS 4',
           ...tempoMap.map(t => `  ${t.tick} = B ${Math.round(t.bpm * 1000)}`),
-          '}',
-          '[Events]', '{', '}'
+          '}'
         ];
+        
+        // Export lyrics as events
+        const syncedLyrics = lyrics.filter(l => l.synced && l.time !== null);
+        if (syncedLyrics.length > 0) {
+          lines.push('[Events]', '{');
+          syncedLyrics.forEach(lyric => {
+            const tick = Math.round(timeToTick(lyric.time - lyricsOffset));
+            // Clone Hero lyric format: tick = E "lyric text"
+            lines.push(`  ${tick} = E "lyric ${lyric.text}"`);
+          });
+          lines.push('}');
+        } else {
+          lines.push('[Events]', '{', '}');
+        }
         
         // Export all charts with notes
         Object.entries(charts).forEach(([key, chartNotes]) => {
@@ -1087,7 +1381,326 @@
       }
       
       // Chart screen
+      
+      // Side panel content (for desktop)
+      const SidePanel = ({ side }) => (
+        <div className={`side-panel ${side === 'right' ? 'side-panel-right' : ''} p-3 text-white text-sm`}>
+          {side === 'left' ? (
+            <>
+              {/* Song Info */}
+              <div className="mb-4">
+                <h3 className="text-xs font-bold text-gray-400 mb-2 uppercase">Song Info</h3>
+                <input
+                  type="text"
+                  value={songName}
+                  onChange={(e) => setSongName(e.target.value)}
+                  className="w-full bg-gray-700 rounded px-2 py-1 text-sm mb-1"
+                  placeholder="Song name"
+                />
+                <input
+                  type="text"
+                  value={artistName}
+                  onChange={(e) => setArtistName(e.target.value)}
+                  className="w-full bg-gray-700 rounded px-2 py-1 text-sm mb-1"
+                  placeholder="Artist"
+                />
+                <div className="flex gap-1">
+                  <input type="text" value={album} onChange={(e) => setAlbum(e.target.value)} 
+                    className="flex-1 bg-gray-700 rounded px-2 py-1 text-xs" placeholder="Album" />
+                  <input type="text" value={year} onChange={(e) => setYear(e.target.value)} 
+                    className="w-16 bg-gray-700 rounded px-2 py-1 text-xs" placeholder="Year" />
+                </div>
+              </div>
+              
+              {/* Chart Selection */}
+              <div className="mb-4">
+                <h3 className="text-xs font-bold text-gray-400 mb-2 uppercase">Chart</h3>
+                <div className="flex gap-1 mb-1">
+                  {Object.entries(INSTRUMENTS).map(([key, inst]) => (
+                    <button
+                      key={key}
+                      onClick={() => setCurrentInstrument(key)}
+                      className={`flex-1 py-1 rounded text-xs ${currentInstrument === key ? 'bg-blue-600' : 'bg-gray-700'}`}
+                    >
+                      {inst.name}
+                    </button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 gap-1">
+                  {DIFFICULTIES.map(diff => {
+                    const exists = chartExists(diff, currentInstrument);
+                    const isCurrent = diff === currentDifficulty;
+                    return (
+                      <button
+                        key={diff}
+                        onClick={() => {
+                          if (!exists) addNewChart(diff, currentInstrument);
+                          else setCurrentDifficulty(diff);
+                        }}
+                        className={`py-1 rounded text-xs ${isCurrent ? 'bg-blue-600' : exists ? 'bg-gray-600' : 'bg-gray-800 text-gray-500'}`}
+                      >
+                        {diff} {exists ? `(${charts[getChartKey(diff, currentInstrument)]?.length || 0})` : '+'}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              
+              {/* Grid & Tempo */}
+              <div className="mb-4">
+                <h3 className="text-xs font-bold text-gray-400 mb-2 uppercase">Grid Snap</h3>
+                <div className="flex gap-1">
+                  {[
+                    { val: RESOLUTION, label: '1 beat' },
+                    { val: HALF_BEAT, label: '1/2' },
+                    { val: RESOLUTION/4, label: '1/4' },
+                  ].map(g => (
+                    <button
+                      key={g.val}
+                      onClick={() => setGridSnap(g.val)}
+                      className={`flex-1 py-1 rounded text-xs ${gridSnap === g.val ? 'bg-blue-600' : 'bg-gray-700'}`}
+                    >
+                      {g.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              
+              {/* Playback */}
+              <div className="mb-4">
+                <h3 className="text-xs font-bold text-gray-400 mb-2 uppercase">Playback</h3>
+                <div className="flex gap-1 mb-2">
+                  {[0.25, 0.5, 0.75, 1.0].map(rate => (
+                    <button
+                      key={rate}
+                      onClick={() => handleRateChange(rate)}
+                      className={`flex-1 py-1 rounded text-xs ${playbackRate === rate ? 'bg-blue-600' : 'bg-gray-700'}`}
+                    >
+                      {rate === 1 ? '1x' : `${Math.round(rate * 100)}%`}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-400">Clap:</span>
+                  <select 
+                    value={noteClap} 
+                    onChange={(e) => setNoteClap(e.target.value)}
+                    className="flex-1 bg-gray-700 rounded px-2 py-1 text-xs"
+                  >
+                    <option value="off">Off</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </div>
+              </div>
+              
+              {/* Pro Mode */}
+              <div className="mb-4">
+                <h3 className="text-xs font-bold text-gray-400 mb-2 uppercase">Pro Mode</h3>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs">Enable Pro Mode</span>
+                  <button 
+                    onClick={() => setProMode(!proMode)}
+                    className={`w-10 h-5 rounded-full ${proMode ? 'bg-blue-600' : 'bg-gray-600'} relative`}
+                  >
+                    <div className={`absolute w-4 h-4 bg-white rounded-full top-0.5 transition-all ${proMode ? 'right-0.5' : 'left-0.5'}`} />
+                  </button>
+                </div>
+                {proMode && (
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => setTapMode(!tapMode)}
+                      className={`flex-1 py-1 rounded text-xs ${tapMode ? 'bg-cyan-600' : 'bg-gray-700'}`}
+                    >
+                      Tap {tapMode ? '✓' : ''}
+                    </button>
+                    <button
+                      onClick={() => setForceMode(!forceMode)}
+                      className={`flex-1 py-1 rounded text-xs ${forceMode ? 'bg-orange-600' : 'bg-gray-700'}`}
+                    >
+                      Force {forceMode ? '✓' : ''}
+                    </button>
+                  </div>
+                )}
+              </div>
+              
+              {/* Actions */}
+              <div className="mb-4">
+                <h3 className="text-xs font-bold text-gray-400 mb-2 uppercase">Actions</h3>
+                <button onClick={() => setShowLyrics(true)} className="w-full py-1 bg-purple-600 rounded text-xs mb-1">
+                  🎤 Edit Lyrics {lyrics.length > 0 ? `(${lyrics.length})` : ''}
+                </button>
+                <button onClick={saveProgress} className="w-full py-1 bg-blue-600 rounded text-xs mb-1">
+                  💾 Save Progress
+                </button>
+                <button onClick={exportChart} className="w-full py-1 bg-green-600 rounded text-xs mb-1">
+                  📤 Export .chart
+                </button>
+                <button onClick={addSilence} className="w-full py-1 bg-gray-700 rounded text-xs mb-1">
+                  🔇 Add 3s Silence
+                </button>
+                <button onClick={() => { startFresh(); }} className="w-full py-1 bg-red-900 rounded text-xs">
+                  🗑️ Start New
+                </button>
+              </div>
+              
+              {/* Current Lyric */}
+              {lyrics.length > 0 && (
+                <div className="mb-4">
+                  <h3 className="text-xs font-bold text-gray-400 mb-2 uppercase">Current Lyric</h3>
+                  <div className="bg-gray-800 rounded p-2 text-sm text-center">
+                    {currentLyric ? (
+                      <span className="text-green-400">♪ {currentLyric.text}</span>
+                    ) : (
+                      <span className="text-gray-500">--</span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              {/* Keyboard Shortcuts */}
+              <div className="mb-4">
+                <h3 className="text-xs font-bold text-gray-400 mb-2 uppercase">Keyboard Shortcuts</h3>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Place notes</span>
+                    <div><span className="shortcut-key">1</span>-<span className="shortcut-key">5</span> or <span className="shortcut-key">G</span><span className="shortcut-key">R</span><span className="shortcut-key">Y</span><span className="shortcut-key">B</span><span className="shortcut-key">O</span></div>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Open note</span>
+                    <span className="shortcut-key">0</span> or <span className="shortcut-key">`</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Sustain toggle</span>
+                    <span><span className="shortcut-key">Shift</span> + note</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Play/Pause</span>
+                    <span className="shortcut-key">Space</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Scroll up/down</span>
+                    <span><span className="shortcut-key">↑</span><span className="shortcut-key">↓</span> or <span className="shortcut-key">W</span><span className="shortcut-key">S</span></span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Jump beat</span>
+                    <span><span className="shortcut-key">←</span><span className="shortcut-key">→</span> or <span className="shortcut-key">A</span><span className="shortcut-key">D</span></span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Fast scroll</span>
+                    <span><span className="shortcut-key">Shift</span> + <span className="shortcut-key">↑</span>/<span className="shortcut-key">↓</span></span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Tap mode</span>
+                    <span className="shortcut-key">T</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Force mode</span>
+                    <span className="shortcut-key">F</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Grid: 1 beat</span>
+                    <span className="shortcut-key">Q</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Grid: 1/2 beat</span>
+                    <span className="shortcut-key">E</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Copy selection</span>
+                    <span><span className="shortcut-key">Ctrl</span>+<span className="shortcut-key">C</span></span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Paste</span>
+                    <span><span className="shortcut-key">Ctrl</span>+<span className="shortcut-key">V</span></span>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Current Status */}
+              <div className="mb-4">
+                <h3 className="text-xs font-bold text-gray-400 mb-2 uppercase">Status</h3>
+                <div className="bg-gray-800 rounded p-2 text-xs space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Notes:</span>
+                    <span>{notes.length}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">BPM:</span>
+                    <span className="text-yellow-400">{currentBpm}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Beat:</span>
+                    <span>{Math.floor(currentTick / RESOLUTION)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Time:</span>
+                    <span>{formatTime(currentTime)} / {formatTime(duration)}</span>
+                  </div>
+                  {sustainModes.length > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Sustain:</span>
+                      <span className="text-yellow-400">{sustainModes.map(s => s.lane === OPEN_LANE ? 'OPEN' : instrumentConfig.labels[s.lane]).join('+')}</span>
+                    </div>
+                  )}
+                  {(tapMode || forceMode) && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Mode:</span>
+                      <span className="text-cyan-400">{tapMode ? 'TAP ' : ''}{forceMode ? 'FORCE' : ''}</span>
+                    </div>
+                  )}
+                  {clipboard.length > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Clipboard:</span>
+                      <span className="text-purple-400">{clipboard.length} notes</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+              
+              {/* Selection */}
+              <div className="mb-4">
+                <h3 className="text-xs font-bold text-gray-400 mb-2 uppercase">Selection</h3>
+                <div className="flex gap-1 mb-1">
+                  <button 
+                    onClick={setSelectionStartHere}
+                    className={`flex-1 py-1 rounded text-xs ${isSelectingStart ? 'bg-purple-500' : 'bg-purple-700'}`}
+                  >
+                    {isSelectingStart ? 'Setting...' : 'Set Start'}
+                  </button>
+                  <button 
+                    onClick={setSelectionEndHere}
+                    disabled={selectionStart === null}
+                    className="flex-1 py-1 bg-purple-700 rounded text-xs disabled:opacity-30"
+                  >
+                    Set End
+                  </button>
+                </div>
+                {selectionStart !== null && (
+                  <div className="text-xs text-center text-purple-300 mb-1">
+                    Beat {Math.floor(Math.min(selectionStart, liveSelectionEnd || selectionStart)/RESOLUTION)} - {Math.floor(Math.max(selectionStart, liveSelectionEnd || selectionStart)/RESOLUTION)}
+                  </div>
+                )}
+                <div className="flex gap-1">
+                  <button onClick={copySelection} disabled={selectionStart === null} className="flex-1 py-1 bg-blue-600 rounded text-xs disabled:opacity-30">Copy</button>
+                  <button onClick={pasteAtCurrent} disabled={clipboard.length === 0} className="flex-1 py-1 bg-green-600 rounded text-xs disabled:opacity-30">Paste</button>
+                  <button onClick={deleteSelection} disabled={selectionStart === null} className="flex-1 py-1 bg-red-600 rounded text-xs disabled:opacity-30">Delete</button>
+                </div>
+                <button onClick={clearSelection} className="w-full py-1 bg-gray-700 rounded text-xs mt-1">Clear Selection</button>
+              </div>
+            </>
+          )}
+        </div>
+      );
+      
       return (
+        <div className="app-wrapper">
+        {/* Left side panel (desktop only) */}
+        <SidePanel side="left" />
+        
         <div className="app-container">
         <div className="flex flex-col h-full bg-gray-900 text-white select-none overflow-hidden">
           {audioUrl && (
@@ -1127,6 +1740,10 @@
                 
                 <button onClick={() => { setShowAddChart(true); setShowMenu(false); }} className="w-full px-4 py-2 bg-gray-700 rounded mb-2 text-left text-sm">
                   ➕ Add Instrument/Difficulty
+                </button>
+                
+                <button onClick={() => { setShowLyrics(true); setShowMenu(false); }} className="w-full px-4 py-2 bg-gray-700 rounded mb-2 text-left text-sm">
+                  🎤 Edit Lyrics
                 </button>
                 
                 <div className="flex items-center justify-between px-4 py-2 bg-gray-700 rounded mb-2">
@@ -1311,9 +1928,138 @@
             </div>
           )}
           
-          {/* Edit Toolbar - slides down, no overlay */}
+          {/* Lyrics Modal */}
+          {showLyrics && (
+            <div className="modal-overlay" onClick={() => setShowLyrics(false)}>
+              <div className="bg-gray-800 rounded-lg p-4 m-4 w-full max-w-lg max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-lg font-bold">Lyrics Editor</h2>
+                  <button onClick={() => setShowLyrics(false)} className="text-gray-400 hover:text-white">✕</button>
+                </div>
+                
+                {/* Search / Import */}
+                <div className="flex gap-2 mb-3">
+                  <button 
+                    onClick={searchLyrics}
+                    disabled={lyricsSearching}
+                    className="flex-1 py-2 bg-blue-600 rounded text-sm disabled:opacity-50"
+                  >
+                    {lyricsSearching ? 'Searching...' : '🔍 Search Lyrics'}
+                  </button>
+                  <label className="flex-1 py-2 bg-gray-700 rounded text-sm text-center cursor-pointer">
+                    📄 Import LRC
+                    <input 
+                      type="file" 
+                      accept=".lrc,.txt"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onload = (ev) => parseLrcLyrics(ev.target.result);
+                          reader.readAsText(file);
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+                
+                {/* Offset control */}
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-xs text-gray-400">Offset:</span>
+                  <button onClick={() => setLyricsOffset(o => o - 0.1)} className="px-2 py-1 bg-gray-700 rounded text-xs">-0.1s</button>
+                  <span className="text-xs w-16 text-center">{lyricsOffset.toFixed(1)}s</span>
+                  <button onClick={() => setLyricsOffset(o => o + 0.1)} className="px-2 py-1 bg-gray-700 rounded text-xs">+0.1s</button>
+                  <button onClick={() => setLyricsOffset(0)} className="px-2 py-1 bg-gray-600 rounded text-xs ml-2">Reset</button>
+                  <button onClick={autoSyncLyrics} className="px-2 py-1 bg-purple-600 rounded text-xs ml-auto">Auto-Sync All</button>
+                </div>
+                
+                {lyricsError && (
+                  <div className="bg-red-900 rounded p-2 mb-3 text-sm">{lyricsError}</div>
+                )}
+                
+                {/* Current position */}
+                <div className="bg-gray-900 rounded p-2 mb-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span>Current: {formatTime(currentTime)}</span>
+                    {currentLyric && <span className="text-green-400">♪ {currentLyric.text}</span>}
+                  </div>
+                </div>
+                
+                {/* Lyrics list */}
+                <div className="flex-1 overflow-y-auto min-h-[200px] bg-gray-900 rounded p-2">
+                  {lyrics.length === 0 ? (
+                    <div className="text-center text-gray-500 py-8">
+                      <p>No lyrics loaded</p>
+                      <p className="text-xs mt-2">Search by artist/title or import an LRC file</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      {lyrics.map((line, i) => (
+                        <div 
+                          key={i} 
+                          className={`flex items-center gap-2 p-1 rounded text-sm ${
+                            currentLyric === line ? 'bg-green-900' : 'hover:bg-gray-800'
+                          }`}
+                        >
+                          <button
+                            onClick={() => syncLyricLine(i)}
+                            className="px-2 py-0.5 bg-blue-600 rounded text-xs shrink-0"
+                            title="Set timing to current position"
+                          >
+                            Sync
+                          </button>
+                          <span className="w-16 text-xs text-gray-400 shrink-0">
+                            {line.synced && line.time !== null ? formatTime(line.time) : '--:--'}
+                          </span>
+                          <span className="flex-1 truncate">{line.text}</span>
+                          {line.synced && (
+                            <button
+                              onClick={() => clearLyricTiming(i)}
+                              className="text-red-400 hover:text-red-300 text-xs shrink-0"
+                              title="Clear timing"
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                
+                {/* Manual add */}
+                <div className="mt-3 flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Add lyric line manually..."
+                    className="flex-1 bg-gray-700 rounded px-2 py-1 text-sm"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && e.target.value.trim()) {
+                        setLyrics(prev => [...prev, { time: null, text: e.target.value.trim(), synced: false }]);
+                        e.target.value = '';
+                      }
+                    }}
+                  />
+                  <button 
+                    onClick={() => setLyrics([])}
+                    className="px-3 py-1 bg-red-900 rounded text-sm"
+                  >
+                    Clear All
+                  </button>
+                </div>
+                
+                <div className="mt-3 text-xs text-gray-500">
+                  {lyrics.filter(l => l.synced).length}/{lyrics.length} lines synced • 
+                  Tip: Play song, press Sync when each line should appear
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Edit Toolbar - mobile only */}
           {showEditMenu && (
-            <div className="bg-gray-800 border-b border-gray-700 p-2 flex flex-col gap-2">
+            <div className="bg-gray-800 border-b border-gray-700 p-2 flex flex-col gap-2 mobile-only">
               <div className="flex items-center gap-2">
                 <button 
                   onClick={setSelectionStartHere} 
@@ -1380,8 +2126,8 @@
             </div>
           )}
           
-          {/* Top controls */}
-          <div className="bg-gray-800 p-2 flex flex-col gap-1.5 flex-shrink-0">
+          {/* Top controls - mobile only */}
+          <div className="bg-gray-800 p-2 flex flex-col gap-1.5 flex-shrink-0 mobile-only">
             {/* Row 1: Menu, song name, edit, export */}
             <div className="flex items-center gap-2">
               <button onClick={() => setShowMenu(true)} className="px-2 py-1 bg-gray-700 rounded text-sm">☰</button>
@@ -1507,6 +2253,23 @@
               <button onClick={() => moveByBeats(1)} className="px-2 py-1 bg-gray-700 rounded text-xs">+1</button>
               <button onClick={() => moveByBeats(4)} className="px-2 py-1 bg-gray-700 rounded text-xs">+4</button>
             </div>
+          </div>
+          
+          {/* Desktop header - minimal playback controls */}
+          <div className="bg-gray-800 p-2 flex items-center gap-3 flex-shrink-0 desktop-only" style={{display: 'none'}}>
+            <button
+              onClick={togglePlay}
+              disabled={!audioReady}
+              className={`w-12 h-8 rounded ${isPlaying ? 'bg-yellow-600' : 'bg-green-600'} disabled:opacity-50 flex items-center justify-center`}
+            >
+              {isPlaying ? '⏸' : '▶'}
+            </button>
+            <span className="font-mono text-sm">{formatTime(currentTime)} / {formatTime(duration)}</span>
+            <span className="text-yellow-400 text-sm">{currentBpm} BPM</span>
+            <span className="text-gray-400 text-sm">Beat {Math.floor(currentTick / RESOLUTION)}</span>
+            <div className="flex-1"></div>
+            <span className="text-sm text-blue-400">{currentDifficulty} {instrumentConfig.name}</span>
+            <span className="text-sm text-gray-400">{notes.length} notes</span>
           </div>
           
           {/* Highway */}
@@ -1785,6 +2548,10 @@
             ))}
           </div>
         </div>
+        </div>
+        
+        {/* Right side panel (desktop only) */}
+        <SidePanel side="right" />
         </div>
       );
     }

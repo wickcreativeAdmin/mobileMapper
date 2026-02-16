@@ -1,6 +1,10 @@
 import os
 import tempfile
 import traceback
+import urllib.request
+import urllib.parse
+import json
+import re
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 
@@ -18,6 +22,87 @@ def index():
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok'})
+
+@app.route('/lyrics/search', methods=['GET'])
+def search_lyrics():
+    """
+    Search for lyrics using lyrics.ovh API
+    """
+    artist = request.args.get('artist', '')
+    title = request.args.get('title', '')
+    
+    if not artist or not title:
+        return jsonify({'success': False, 'error': 'Artist and title required'}), 400
+    
+    try:
+        # Use lyrics.ovh API (free, no key needed)
+        url = f"https://api.lyrics.ovh/v1/{urllib.parse.quote(artist)}/{urllib.parse.quote(title)}"
+        
+        req = urllib.request.Request(url, headers={'User-Agent': 'MobileMapper/1.0'})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode())
+            
+            if 'lyrics' in data:
+                # Clean up lyrics
+                lyrics = data['lyrics'].strip()
+                # Split into lines
+                lines = [line.strip() for line in lyrics.split('\n') if line.strip()]
+                
+                return jsonify({
+                    'success': True,
+                    'lyrics': lyrics,
+                    'lines': lines
+                })
+            else:
+                return jsonify({'success': False, 'error': 'No lyrics found'}), 404
+                
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return jsonify({'success': False, 'error': 'Lyrics not found'}), 404
+        return jsonify({'success': False, 'error': f'API error: {e.code}'}), 500
+    except Exception as e:
+        print(f"Lyrics search error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/lyrics/parse', methods=['POST'])
+def parse_lrc():
+    """
+    Parse LRC format lyrics (timestamped)
+    """
+    data = request.get_json()
+    lrc_content = data.get('lrc', '')
+    
+    if not lrc_content:
+        return jsonify({'success': False, 'error': 'No LRC content provided'}), 400
+    
+    try:
+        lines = []
+        # LRC format: [mm:ss.xx]text or [mm:ss]text
+        pattern = r'\[(\d{1,2}):(\d{2})(?:\.(\d{2}))?\](.+)'
+        
+        for line in lrc_content.split('\n'):
+            match = re.match(pattern, line.strip())
+            if match:
+                minutes = int(match.group(1))
+                seconds = int(match.group(2))
+                centiseconds = int(match.group(3)) if match.group(3) else 0
+                text = match.group(4).strip()
+                
+                time_seconds = minutes * 60 + seconds + centiseconds / 100
+                
+                if text:  # Skip empty lines
+                    lines.append({
+                        'time': time_seconds,
+                        'text': text
+                    })
+        
+        return jsonify({
+            'success': True,
+            'lines': lines
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/analyze', methods=['POST'])
 def analyze_audio():
