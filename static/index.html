@@ -38,6 +38,9 @@
       display: flex;
       flex-direction: column;
     }
+    .app-wrapper {
+      display: contents;
+    }
     .side-panel {
       display: none;
     }
@@ -45,14 +48,16 @@
     @media (min-width: 900px) {
       .app-wrapper {
         display: flex;
+        justify-content: center;
         width: 100%;
-        max-width: 1200px;
         height: 100%;
       }
       .side-panel {
         display: flex;
         flex-direction: column;
         width: 280px;
+        min-width: 280px;
+        max-width: 280px;
         background: #1f2937;
         border-right: 1px solid #374151;
         overflow-y: auto;
@@ -63,7 +68,10 @@
         border-left: 1px solid #374151;
       }
       .app-container {
+        width: 430px;
+        min-width: 430px;
         max-width: 430px;
+        flex-shrink: 0;
         border-left: 1px solid #374151;
         border-right: 1px solid #374151;
       }
@@ -71,7 +79,7 @@
         display: none !important;
       }
       .desktop-only {
-        display: block !important;
+        display: flex !important;
       }
     }
     @media (max-width: 899px) {
@@ -262,8 +270,11 @@
         if (screen !== 'chart') return;
         
         const handleKeyDown = (e) => {
-          // Don't trigger if typing in an input
-          if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+          // Don't trigger if typing in an input, textarea, or select
+          const tag = e.target.tagName.toUpperCase();
+          if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+          // Also check for contenteditable
+          if (e.target.isContentEditable) return;
           
           const key = e.key.toLowerCase();
           
@@ -1124,18 +1135,23 @@
       };
       
       // Lyrics functions
+      const [lyricsSearchQuery, setLyricsSearchQuery] = useState('');
+      
       const searchLyrics = async () => {
         if (!artistName || !songName) {
           setLyricsError('Need artist and song name to search');
           return;
         }
         
+        const query = `${artistName} - ${songName}`;
+        setLyricsSearchQuery(query);
         setLyricsSearching(true);
         setLyricsError(null);
         
         try {
           const response = await fetch(
-            `${API_URL}/lyrics/search?artist=${encodeURIComponent(artistName)}&title=${encodeURIComponent(songName)}`
+            `${API_URL}/lyrics/search?artist=${encodeURIComponent(artistName)}&title=${encodeURIComponent(songName)}`,
+            { signal: AbortSignal.timeout(15000) }  // 15 second timeout
           );
           const data = await response.json();
           
@@ -1149,10 +1165,14 @@
             setLyrics(timedLyrics);
             setLyricsError(null);
           } else {
-            setLyricsError(data.error || 'No lyrics found');
+            setLyricsError(data.error || 'No lyrics found for "' + query + '"');
           }
         } catch (err) {
-          setLyricsError('Failed to search lyrics: ' + err.message);
+          if (err.name === 'TimeoutError' || err.message.includes('timeout')) {
+            setLyricsError('Search timed out. Try importing an LRC file instead.');
+          } else {
+            setLyricsError('Search failed: ' + err.message);
+          }
         } finally {
           setLyricsSearching(false);
         }
@@ -1937,14 +1957,20 @@
                   <button onClick={() => setShowLyrics(false)} className="text-gray-400 hover:text-white">✕</button>
                 </div>
                 
+                {/* Search info */}
+                <div className="bg-gray-900 rounded p-2 mb-3 text-xs">
+                  <span className="text-gray-400">Will search for: </span>
+                  <span className="text-blue-400">{artistName || '(no artist)'} - {songName || '(no title)'}</span>
+                </div>
+                
                 {/* Search / Import */}
                 <div className="flex gap-2 mb-3">
                   <button 
                     onClick={searchLyrics}
-                    disabled={lyricsSearching}
+                    disabled={lyricsSearching || !artistName || !songName}
                     className="flex-1 py-2 bg-blue-600 rounded text-sm disabled:opacity-50"
                   >
-                    {lyricsSearching ? 'Searching...' : '🔍 Search Lyrics'}
+                    {lyricsSearching ? `Searching "${artistName}"...` : '🔍 Search Lyrics'}
                   </button>
                   <label className="flex-1 py-2 bg-gray-700 rounded text-sm text-center cursor-pointer">
                     📄 Import LRC

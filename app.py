@@ -34,32 +34,50 @@ def search_lyrics():
     if not artist or not title:
         return jsonify({'success': False, 'error': 'Artist and title required'}), 400
     
+    print(f"Searching lyrics for: {artist} - {title}")
+    
     try:
         # Use lyrics.ovh API (free, no key needed)
-        url = f"https://api.lyrics.ovh/v1/{urllib.parse.quote(artist)}/{urllib.parse.quote(title)}"
+        # Clean up the search terms
+        clean_artist = artist.strip()
+        clean_title = title.strip()
+        # Remove common prefixes like track numbers
+        import re
+        clean_title = re.sub(r'^\d+[\s\-\.]+', '', clean_title)
+        
+        url = f"https://api.lyrics.ovh/v1/{urllib.parse.quote(clean_artist)}/{urllib.parse.quote(clean_title)}"
+        print(f"Lyrics API URL: {url}")
         
         req = urllib.request.Request(url, headers={'User-Agent': 'MobileMapper/1.0'})
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=20) as response:  # Increased timeout
             data = json.loads(response.read().decode())
             
             if 'lyrics' in data:
                 # Clean up lyrics
                 lyrics = data['lyrics'].strip()
-                # Split into lines
+                # Split into lines, removing empty ones
                 lines = [line.strip() for line in lyrics.split('\n') if line.strip()]
+                
+                print(f"Found {len(lines)} lines of lyrics")
                 
                 return jsonify({
                     'success': True,
                     'lyrics': lyrics,
-                    'lines': lines
+                    'lines': lines,
+                    'artist': clean_artist,
+                    'title': clean_title
                 })
             else:
-                return jsonify({'success': False, 'error': 'No lyrics found'}), 404
+                return jsonify({'success': False, 'error': f'No lyrics found for "{clean_artist} - {clean_title}"'}), 404
                 
     except urllib.error.HTTPError as e:
+        print(f"HTTP Error: {e.code}")
         if e.code == 404:
-            return jsonify({'success': False, 'error': 'Lyrics not found'}), 404
+            return jsonify({'success': False, 'error': f'No lyrics found for "{artist} - {title}"'}), 404
         return jsonify({'success': False, 'error': f'API error: {e.code}'}), 500
+    except urllib.error.URLError as e:
+        print(f"URL Error: {e}")
+        return jsonify({'success': False, 'error': 'Connection failed. The lyrics service may be unavailable.'}), 500
     except Exception as e:
         print(f"Lyrics search error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
