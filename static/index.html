@@ -66,13 +66,22 @@
     
     const API_URL = '';
     
-    const LANES = 5;
-    const LANE_COLORS = ['#22c55e', '#ef4444', '#eab308', '#3b82f6', '#f97316'];
-    const LANE_LABELS = ['G', 'R', 'Y', 'B', 'O'];
     const RESOLUTION = 192;
-    const HALF_BEAT = RESOLUTION / 2; // 96 ticks
-    const AUTOSAVE_KEY = 'chartmaker_autosave';
+    const HALF_BEAT = RESOLUTION / 2;
+    const AUTOSAVE_KEY = 'mobilemapper_autosave_v3';
     const AUTOSAVE_INTERVAL = 5000;
+    
+    // Note flags for pro mode
+    const NoteFlags = { NONE: 0, TAP: 1, FORCED: 2 };
+    
+    // Instruments configuration
+    const INSTRUMENTS = {
+      Single: { name: 'Guitar', lanes: 5, colors: ['#22c55e', '#ef4444', '#eab308', '#3b82f6', '#f97316'], labels: ['G', 'R', 'Y', 'B', 'O'], hasSustain: true, hasOpen: true },
+      DoubleBass: { name: 'Bass', lanes: 5, colors: ['#22c55e', '#ef4444', '#eab308', '#3b82f6', '#f97316'], labels: ['G', 'R', 'Y', 'B', 'O'], hasSustain: true, hasOpen: true },
+      Drums: { name: 'Drums', lanes: 5, colors: ['#f97316', '#ef4444', '#eab308', '#3b82f6', '#22c55e'], labels: ['K', 'R', 'Y', 'B', 'G'], hasSustain: false, hasOpen: false },
+    };
+    const DIFFICULTIES = ['Easy', 'Medium', 'Hard', 'Expert'];
+    const OPEN_LANE = 7;
     
     function ChartMaker() {
       // App state
@@ -95,25 +104,50 @@
       
       // Chart state
       const [tempoMap, setTempoMap] = useState([{ tick: 0, bpm: 120 }]);
-      const [tempoMapType, setTempoMapType] = useState('measure');
+      const [tempoMapType, setTempoMapType] = useState('beat');
       const [allTempoMaps, setAllTempoMaps] = useState(null);
       const [firstBeat, setFirstBeat] = useState(0);
-      const [notes, setNotes] = useState([]);
+      const [gridSnap, setGridSnap] = useState(HALF_BEAT);
+      
+      // Multi-chart state
+      const [charts, setCharts] = useState({});
+      const [currentInstrument, setCurrentInstrument] = useState('Single');
+      const [currentDifficulty, setCurrentDifficulty] = useState('Expert');
+      
+      // Metadata state
       const [songName, setSongName] = useState('Untitled');
       const [artistName, setArtistName] = useState('Unknown');
-      const [gridSnap, setGridSnap] = useState(HALF_BEAT); // Default to half-beat
+      const [album, setAlbum] = useState('');
+      const [year, setYear] = useState('');
+      const [genre, setGenre] = useState('rock');
+      const [charter, setCharter] = useState('');
+      const [previewStart, setPreviewStart] = useState(0);
+      const [previewEnd, setPreviewEnd] = useState(0);
+      
+      // Pro mode state
+      const [proMode, setProMode] = useState(false);
+      const [tapMode, setTapMode] = useState(false);
+      const [forceMode, setForceMode] = useState(false);
+      
+      // Note clap state
+      const [noteClap, setNoteClap] = useState('off');
+      const [lastClappedTick, setLastClappedTick] = useState(-1);
+      const clapAudioRef = useRef(null);
       
       // Selection/Copy state
       const [selectionStart, setSelectionStart] = useState(null);
       const [selectionEnd, setSelectionEnd] = useState(null);
       const [clipboard, setClipboard] = useState([]);
       const [showEditMenu, setShowEditMenu] = useState(false);
+      const [isSelectingStart, setIsSelectingStart] = useState(false);
       
       // Sustain mode state - array of active lanes
-      const [sustainModes, setSustainModes] = useState([]); // Array of { lane, startTick, noteIndex, mode }
+      const [sustainModes, setSustainModes] = useState([]);
       
       // Save/Load state
       const [showMenu, setShowMenu] = useState(false);
+      const [showMetaEditor, setShowMetaEditor] = useState(false);
+      const [showAddChart, setShowAddChart] = useState(false);
       const [lastSaved, setLastSaved] = useState(null);
       const [hasAutoSave, setHasAutoSave] = useState(false);
       const [pendingLoadData, setPendingLoadData] = useState(null);
@@ -126,6 +160,46 @@
       const audioRef = useRef(null);
       const animationRef = useRef(null);
       const canvasRef = useRef(null);
+      
+      // Current chart key and notes accessor
+      const currentChartKey = `${currentDifficulty}${currentInstrument}`;
+      const notes = charts[currentChartKey] || [];
+      const setNotes = useCallback((newNotes) => {
+        setCharts(prev => ({
+          ...prev,
+          [currentChartKey]: typeof newNotes === 'function' ? newNotes(prev[currentChartKey] || []) : newNotes
+        }));
+      }, [currentChartKey]);
+      
+      // Current instrument config
+      const instrumentConfig = INSTRUMENTS[currentInstrument];
+      
+      // Initialize clap audio context
+      useEffect(() => {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        clapAudioRef.current = audioCtx;
+        return () => audioCtx.close();
+      }, []);
+      
+      // Play clap sound
+      const playClap = useCallback(() => {
+        if (noteClap === 'off' || !clapAudioRef.current) return;
+        try {
+          const ctx = clapAudioRef.current;
+          if (ctx.state === 'suspended') ctx.resume();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          const volumes = { low: 0.1, medium: 0.3, high: 0.6 };
+          gain.gain.setValueAtTime(volumes[noteClap] || 0.3, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.frequency.setValueAtTime(900, ctx.currentTime);
+          osc.type = 'square';
+          osc.start(ctx.currentTime);
+          osc.stop(ctx.currentTime + 0.08);
+        } catch (e) { console.error('Clap error:', e); }
+      }, [noteClap]);
       
       // Generate waveform from audio - higher resolution for highway display
       const generateWaveform = async (file) => {
@@ -192,7 +266,7 @@
         if (saved) {
           try {
             const data = JSON.parse(saved);
-            if (data && data.songName && data.notes) {
+            if (data && data.songName && (data.notes || data.charts)) {
               setHasAutoSave(true);
               setPendingLoadData(data);
               setScreen('resume');
@@ -210,21 +284,14 @@
         
         const saveData = () => {
           const data = {
-            version: 2,
+            version: 3,
             savedAt: new Date().toISOString(),
-            songName,
-            artistName,
-            audioFileName,
-            duration,
-            currentTime,
-            firstBeat,
-            tempoMap,
-            tempoMapType,
-            allTempoMaps,
-            notes,
-            playbackRate,
-            gridSnap,
-            reverseScroll
+            songName, artistName, album, year, genre, charter,
+            previewStart, previewEnd,
+            audioFileName, duration, currentTime, firstBeat,
+            tempoMap, tempoMapType, allTempoMaps,
+            charts, currentInstrument, currentDifficulty,
+            playbackRate, gridSnap, reverseScroll, proMode, noteClap
           };
           localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(data));
           setLastSaved(new Date());
@@ -233,7 +300,9 @@
         saveData();
         const interval = setInterval(saveData, AUTOSAVE_INTERVAL);
         return () => clearInterval(interval);
-      }, [screen, songName, artistName, audioFileName, duration, currentTime, firstBeat, tempoMap, tempoMapType, allTempoMaps, notes, playbackRate, gridSnap, reverseScroll]);
+      }, [screen, songName, artistName, album, year, genre, charter, previewStart, previewEnd,
+          audioFileName, duration, currentTime, firstBeat, tempoMap, tempoMapType, allTempoMaps,
+          charts, currentInstrument, currentDifficulty, playbackRate, gridSnap, reverseScroll, proMode, noteClap]);
       
       const clearAutoSave = () => {
         localStorage.removeItem(AUTOSAVE_KEY);
@@ -242,21 +311,14 @@
       
       const saveProgress = () => {
         const data = {
-          version: 2,
+          version: 3,
           savedAt: new Date().toISOString(),
-          songName,
-          artistName,
-          audioFileName,
-          duration,
-          currentTime,
-          firstBeat,
-          tempoMap,
-          tempoMapType,
-          allTempoMaps,
-          notes,
-          playbackRate,
-          gridSnap,
-          reverseScroll
+          songName, artistName, album, year, genre, charter,
+          previewStart, previewEnd,
+          audioFileName, duration, currentTime, firstBeat,
+          tempoMap, tempoMapType, allTempoMaps,
+          charts, currentInstrument, currentDifficulty,
+          playbackRate, gridSnap, reverseScroll, proMode, noteClap
         };
         
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -294,6 +356,12 @@
       const resumeFromData = (data) => {
         setSongName(data.songName || 'Untitled');
         setArtistName(data.artistName || 'Unknown');
+        setAlbum(data.album || '');
+        setYear(data.year || '');
+        setGenre(data.genre || 'rock');
+        setCharter(data.charter || '');
+        setPreviewStart(data.previewStart || 0);
+        setPreviewEnd(data.previewEnd || 0);
         setAudioFileName(data.audioFileName || '');
         setDuration(data.duration || 0);
         setCurrentTime(data.currentTime || 0);
@@ -301,10 +369,21 @@
         setTempoMap(data.tempoMap || [{ tick: 0, bpm: 120 }]);
         setTempoMapType(data.tempoMapType || 'beat');
         setAllTempoMaps(data.allTempoMaps || null);
-        setNotes(data.notes || []);
+        // Handle v2 (notes) and v3 (charts) formats
+        if (data.charts) {
+          setCharts(data.charts);
+        } else if (data.notes) {
+          setCharts({ ExpertSingle: data.notes });
+        } else {
+          setCharts({ ExpertSingle: [] });
+        }
+        setCurrentInstrument(data.currentInstrument || 'Single');
+        setCurrentDifficulty(data.currentDifficulty || 'Expert');
         setPlaybackRate(data.playbackRate || 1.0);
         setGridSnap(data.gridSnap || HALF_BEAT);
         setReverseScroll(data.reverseScroll || false);
+        setProMode(data.proMode || false);
+        setNoteClap(data.noteClap || 'off');
         setPendingLoadData(null);
       };
       
@@ -436,7 +515,9 @@
           setDuration(data.duration);
           setTempoMap(data.tempoMaps.beat);
           setTempoMapType('beat');
-          setNotes([]);
+          setCharts({ ExpertSingle: [] });
+          setCurrentInstrument('Single');
+          setCurrentDifficulty('Expert');
           setCurrentTime(0);
           
           setScreen('chart');
@@ -487,9 +568,22 @@
       };
       
       const updateTime = useCallback(() => {
-        if (audioRef.current) setCurrentTime(audioRef.current.currentTime);
+        if (audioRef.current) {
+          const newTime = audioRef.current.currentTime;
+          setCurrentTime(newTime);
+          
+          // Note clap - play sound when crossing notes
+          if (noteClap !== 'off') {
+            const newTick = timeToTick(newTime);
+            const notesToClap = notes.filter(n => n.tick > lastClappedTick && n.tick <= newTick);
+            if (notesToClap.length > 0) {
+              playClap();
+              setLastClappedTick(Math.max(...notesToClap.map(n => n.tick)));
+            }
+          }
+        }
         if (isPlaying) animationRef.current = requestAnimationFrame(updateTime);
-      }, [isPlaying]);
+      }, [isPlaying, noteClap, notes, lastClappedTick, timeToTick, playClap]);
       
       useEffect(() => {
         if (isPlaying) animationRef.current = requestAnimationFrame(updateTime);
@@ -503,11 +597,15 @@
           setIsPlaying(false);
         } else {
           try {
+            setLastClappedTick(timeToTick(currentTime) - 1);  // Reset clap tracker
             // Ensure we're at the right position before playing
             if (Math.abs(audioRef.current.currentTime - currentTime) > 0.1) {
               audioRef.current.currentTime = currentTime;
             }
             audioRef.current.playbackRate = playbackRate;
+            if (clapAudioRef.current?.state === 'suspended') {
+              await clapAudioRef.current.resume();
+            }
             await audioRef.current.play();
             setIsPlaying(true);
           } catch (err) {
@@ -606,13 +704,27 @@
         if (idx >= 0) {
           setNotes(notes.filter((_, i) => i !== idx));
         } else {
-          setNotes([...notes, { tick: snapped, lane, duration: 0 }].sort((a, b) => a.tick - b.tick));
+          const flags = (tapMode ? NoteFlags.TAP : 0) | (forceMode ? NoteFlags.FORCED : 0);
+          setNotes([...notes, { tick: snapped, lane, duration: 0, flags }].sort((a, b) => a.tick - b.tick));
+        }
+      };
+      
+      // Toggle open note (purple bar)
+      const toggleOpenNote = () => {
+        const snapped = snapToGrid(currentTick);
+        const idx = notes.findIndex(n => n.tick === snapped && n.lane === OPEN_LANE);
+        if (idx >= 0) {
+          setNotes(notes.filter((_, i) => i !== idx));
+        } else {
+          const flags = (tapMode ? NoteFlags.TAP : 0) | (forceMode ? NoteFlags.FORCED : 0);
+          setNotes([...notes, { tick: snapped, lane: OPEN_LANE, duration: 0, flags }].sort((a, b) => a.tick - b.tick));
         }
       };
       
       // Sustain functions
-      const toggleSustainMode = (lane) => {
-        const existingIndex = sustainModes.findIndex(s => s.lane === lane);
+      const toggleSustainMode = (lane, isOpen = false) => {
+        const targetLane = isOpen ? OPEN_LANE : lane;
+        const existingIndex = sustainModes.findIndex(s => s.lane === targetLane);
         
         if (existingIndex >= 0) {
           // Already in sustain mode for this lane - remove it
@@ -622,33 +734,33 @@
           const snapped = snapToGrid(currentTick);
           
           // Look for a note that could have a sustain at current position
-          const noteAtCurrent = notes.find(n => n.lane === lane && n.tick === snapped);
+          const noteAtCurrent = notes.find(n => n.lane === targetLane && n.tick === snapped);
           
           if (noteAtCurrent) {
             // Start sustain mode from this note - track by tick+lane, not index
             setSustainModes([...sustainModes, {
-              lane,
+              lane: targetLane,
               noteTick: noteAtCurrent.tick,
               mode: 'extend'
             }]);
           } else {
             // Check if we're at the end of an existing sustain (to shrink it)
             const noteWithSustainHere = notes.find(n => 
-              n.lane === lane && 
+              n.lane === targetLane && 
               n.duration > 0 && 
               n.tick + n.duration === snapped
             );
             
             if (noteWithSustainHere) {
               setSustainModes([...sustainModes, {
-                lane,
+                lane: targetLane,
                 noteTick: noteWithSustainHere.tick,
                 mode: 'shrink'
               }]);
             } else {
               // Check if we're inside a sustain (to truncate it)
               const noteContainingTick = notes.find(n =>
-                n.lane === lane &&
+                n.lane === targetLane &&
                 n.duration > 0 &&
                 n.tick < snapped &&
                 n.tick + n.duration > snapped
@@ -657,7 +769,7 @@
               if (noteContainingTick) {
                 // Truncate sustain to current position
                 setNotes(notes.map(n => 
-                  n.tick === noteContainingTick.tick && n.lane === lane
+                  n.tick === noteContainingTick.tick && n.lane === targetLane
                     ? { ...n, duration: snapped - n.tick }
                     : n
                 ));
@@ -709,21 +821,28 @@
       // Selection functions
       const setSelectionStartHere = () => {
         setSelectionStart(snapToGrid(currentTick));
+        setIsSelectingStart(true);
+        setSelectionEnd(null);
       };
       
       const setSelectionEndHere = () => {
         setSelectionEnd(snapToGrid(currentTick));
+        setIsSelectingStart(false);
       };
       
       const clearSelection = () => {
         setSelectionStart(null);
         setSelectionEnd(null);
+        setIsSelectingStart(false);
       };
       
+      // Live selection end (shows highlight while scrolling after Set Start)
+      const liveSelectionEnd = isSelectingStart ? snapToGrid(currentTick) : selectionEnd;
+      
       const copySelection = () => {
-        if (selectionStart === null || selectionEnd === null) return;
-        const start = Math.min(selectionStart, selectionEnd);
-        const end = Math.max(selectionStart, selectionEnd);
+        if (selectionStart === null || liveSelectionEnd === null) return;
+        const start = Math.min(selectionStart, liveSelectionEnd);
+        const end = Math.max(selectionStart, liveSelectionEnd);
         
         const selectedNotes = notes.filter(n => n.tick >= start && n.tick <= end);
         // Store notes relative to selection start
@@ -732,6 +851,7 @@
           tick: n.tick - start
         }));
         setClipboard(relativized);
+        setIsSelectingStart(false);
       };
       
       const pasteAtCurrent = () => {
@@ -755,18 +875,18 @@
       };
       
       const deleteSelection = () => {
-        if (selectionStart === null || selectionEnd === null) return;
-        const start = Math.min(selectionStart, selectionEnd);
-        const end = Math.max(selectionStart, selectionEnd);
+        if (selectionStart === null || liveSelectionEnd === null) return;
+        const start = Math.min(selectionStart, liveSelectionEnd);
+        const end = Math.max(selectionStart, liveSelectionEnd);
         
         setNotes(notes.filter(n => n.tick < start || n.tick > end));
         clearSelection();
       };
       
       const nudgeSelection = (direction) => {
-        if (selectionStart === null || selectionEnd === null) return;
-        const start = Math.min(selectionStart, selectionEnd);
-        const end = Math.max(selectionStart, selectionEnd);
+        if (selectionStart === null || liveSelectionEnd === null) return;
+        const start = Math.min(selectionStart, liveSelectionEnd);
+        const end = Math.max(selectionStart, liveSelectionEnd);
         const nudgeAmount = direction * gridSnap;
         
         setNotes(notes.map(n => {
@@ -794,10 +914,39 @@
       
       // Check if a tick is within selection
       const isInSelection = (tick) => {
-        if (selectionStart === null || selectionEnd === null) return false;
-        const start = Math.min(selectionStart, selectionEnd);
-        const end = Math.max(selectionStart, selectionEnd);
+        if (selectionStart === null || liveSelectionEnd === null) return false;
+        const start = Math.min(selectionStart, liveSelectionEnd);
+        const end = Math.max(selectionStart, liveSelectionEnd);
         return tick >= start && tick <= end;
+      };
+      
+      // Chart management functions
+      const getChartKey = (diff, inst) => `${diff}${inst}`;
+      const chartExists = (diff, inst) => {
+        const key = getChartKey(diff, inst);
+        return charts[key] && charts[key].length > 0;
+      };
+      
+      const addNewChart = (difficulty, instrument, copyFrom = null) => {
+        const key = getChartKey(difficulty, instrument);
+        if (copyFrom) {
+          const sourceNotes = charts[copyFrom] || [];
+          setCharts(prev => ({ ...prev, [key]: [...sourceNotes] }));
+        } else {
+          setCharts(prev => ({ ...prev, [key]: [] }));
+        }
+        setCurrentDifficulty(difficulty);
+        setCurrentInstrument(instrument);
+        setShowAddChart(false);
+      };
+      
+      // Add 3 seconds silence
+      const addSilence = () => {
+        if (firstBeat < 3) {
+          setFirstBeat(3);
+        }
+        setShowMenu(false);
+        alert('First beat set to 3 seconds. Make sure your audio file has at least 3 seconds of silence at the start, or add it using an audio editor.');
       };
       
       const exportChart = () => {
@@ -805,25 +954,45 @@
           '[Song]', '{',
           `  Name = "${songName}"`,
           `  Artist = "${artistName}"`,
+          `  Album = "${album}"`,
+          `  Year = "${year}"`,
+          `  Genre = "${genre}"`,
+          `  Charter = "${charter}"`,
           `  Offset = ${-firstBeat.toFixed(3)}`,
           '  Resolution = 192',
           '  Player2 = bass',
           '  Difficulty = 0',
-          '  PreviewStart = 0',
-          '  PreviewEnd = 0',
-          '  Genre = "rock"',
+          `  PreviewStart = ${previewStart.toFixed(3)}`,
+          `  PreviewEnd = ${previewEnd.toFixed(3)}`,
           '  MediaType = "cd"',
-          `  MusicStream = "${audioFileName || 'song.mp3'}"`,
+          `  MusicStream = "${audioFileName || 'song.ogg'}"`,
           '}',
           '[SyncTrack]', '{',
           '  0 = TS 4',
-          ...tempoMap.map(t => `  ${t.tick} = B ${t.bpm * 1000}`),
+          ...tempoMap.map(t => `  ${t.tick} = B ${Math.round(t.bpm * 1000)}`),
           '}',
-          '[Events]', '{', '}',
-          '[ExpertSingle]', '{',
-          ...notes.map(n => `  ${n.tick} = N ${n.lane} ${n.duration || 0}`),
-          '}'
+          '[Events]', '{', '}'
         ];
+        
+        // Export all charts with notes
+        Object.entries(charts).forEach(([key, chartNotes]) => {
+          if (chartNotes && chartNotes.length > 0) {
+            lines.push(`[${key}]`, '{');
+            chartNotes.forEach(n => {
+              // Regular note (open notes use lane 7)
+              lines.push(`  ${n.tick} = N ${n.lane} ${n.duration || 0}`);
+              // Tap flag (note type 6)
+              if (n.flags & NoteFlags.TAP) {
+                lines.push(`  ${n.tick} = N 6 0`);
+              }
+              // Forced flag (note type 5)  
+              if (n.flags & NoteFlags.FORCED) {
+                lines.push(`  ${n.tick} = N 5 0`);
+              }
+            });
+            lines.push('}');
+          }
+        });
         
         const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
@@ -949,35 +1118,193 @@
           {/* Main Menu Modal */}
           {showMenu && (
             <div className="modal-overlay" onClick={() => setShowMenu(false)}>
-              <div className="bg-gray-800 rounded-lg p-4 m-4 w-full max-w-sm" onClick={e => e.stopPropagation()}>
-                <h2 className="text-lg font-bold mb-4">Menu</h2>
+              <div className="bg-gray-800 rounded-lg p-4 m-4 w-full max-w-sm max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <h2 className="text-lg font-bold mb-3">Menu</h2>
                 
-                <button onClick={saveProgress} className="w-full px-4 py-3 bg-blue-600 rounded mb-2 text-left">
+                <button onClick={() => { setShowMetaEditor(true); setShowMenu(false); }} className="w-full px-4 py-2 bg-gray-700 rounded mb-2 text-left text-sm">
+                  📝 Edit Song Info
+                </button>
+                
+                <button onClick={() => { setShowAddChart(true); setShowMenu(false); }} className="w-full px-4 py-2 bg-gray-700 rounded mb-2 text-left text-sm">
+                  ➕ Add Instrument/Difficulty
+                </button>
+                
+                <div className="flex items-center justify-between px-4 py-2 bg-gray-700 rounded mb-2">
+                  <span className="text-sm">Pro Mode</span>
+                  <button 
+                    onClick={() => setProMode(!proMode)}
+                    className={`w-12 h-6 rounded-full ${proMode ? 'bg-blue-600' : 'bg-gray-600'} relative`}
+                  >
+                    <div className={`absolute w-5 h-5 bg-white rounded-full top-0.5 transition-all ${proMode ? 'right-0.5' : 'left-0.5'}`} />
+                  </button>
+                </div>
+                
+                <div className="flex items-center justify-between px-4 py-2 bg-gray-700 rounded mb-2">
+                  <span className="text-sm">Note Clap</span>
+                  <select 
+                    value={noteClap} 
+                    onChange={(e) => setNoteClap(e.target.value)}
+                    className="bg-gray-600 rounded px-2 py-1 text-sm"
+                  >
+                    <option value="off">Off</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </div>
+                
+                <button onClick={addSilence} className="w-full px-4 py-2 bg-gray-700 rounded mb-2 text-left text-sm">
+                  🔇 Add 3s Silence
+                </button>
+                
+                <div className="border-t border-gray-600 my-3"></div>
+                
+                <button onClick={saveProgress} className="w-full px-4 py-2 bg-blue-600 rounded mb-2 text-left text-sm">
                   💾 Save Progress
                 </button>
                 
-                <label className="block w-full px-4 py-3 bg-gray-700 rounded mb-2 cursor-pointer">
+                <label className="block w-full px-4 py-2 bg-gray-700 rounded mb-2 cursor-pointer text-sm">
                   📂 Load Progress
                   <input type="file" accept=".chartmaker,.json" onChange={handleLoadProgress} className="hidden" />
                 </label>
                 
-                <button onClick={exportChart} className="w-full px-4 py-3 bg-green-600 rounded mb-2 text-left">
+                <button onClick={exportChart} className="w-full px-4 py-2 bg-green-600 rounded mb-2 text-left text-sm">
                   📤 Export .chart
                 </button>
                 
-                <div className="border-t border-gray-700 mt-4 pt-4">
-                  <button onClick={() => { startFresh(); setShowMenu(false); }} className="w-full px-4 py-2 bg-red-900 rounded text-left text-sm">
-                    🗑️ Discard & Start New
-                  </button>
-                </div>
+                <div className="border-t border-gray-600 my-3"></div>
+                
+                <button onClick={() => { startFresh(); setShowMenu(false); }} className="w-full px-4 py-2 bg-red-900 rounded text-left text-sm">
+                  🗑️ Discard & Start New
+                </button>
                 
                 {lastSaved && (
-                  <p className="text-xs text-gray-500 mt-4 text-center">
+                  <p className="text-xs text-gray-500 mt-3 text-center">
                     Auto-saved {lastSaved.toLocaleTimeString()}
                   </p>
                 )}
+              </div>
+            </div>
+          )}
+          
+          {/* Metadata Editor Modal */}
+          {showMetaEditor && (
+            <div className="modal-overlay" onClick={() => setShowMetaEditor(false)}>
+              <div className="bg-gray-800 rounded-lg p-4 m-4 w-full max-w-sm max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <h2 className="text-lg font-bold mb-3">Song Info</h2>
                 
-                <button onClick={() => setShowMenu(false)} className="w-full px-4 py-2 bg-gray-600 rounded mt-4">
+                <label className="block mb-2">
+                  <span className="text-xs text-gray-400">Song Name</span>
+                  <input type="text" value={songName} onChange={e => setSongName(e.target.value)} 
+                    className="w-full bg-gray-700 rounded px-2 py-1 text-sm" />
+                </label>
+                
+                <label className="block mb-2">
+                  <span className="text-xs text-gray-400">Artist</span>
+                  <input type="text" value={artistName} onChange={e => setArtistName(e.target.value)} 
+                    className="w-full bg-gray-700 rounded px-2 py-1 text-sm" />
+                </label>
+                
+                <label className="block mb-2">
+                  <span className="text-xs text-gray-400">Album</span>
+                  <input type="text" value={album} onChange={e => setAlbum(e.target.value)} 
+                    className="w-full bg-gray-700 rounded px-2 py-1 text-sm" />
+                </label>
+                
+                <label className="block mb-2">
+                  <span className="text-xs text-gray-400">Year</span>
+                  <input type="text" value={year} onChange={e => setYear(e.target.value)} 
+                    className="w-full bg-gray-700 rounded px-2 py-1 text-sm" />
+                </label>
+                
+                <label className="block mb-2">
+                  <span className="text-xs text-gray-400">Genre</span>
+                  <input type="text" value={genre} onChange={e => setGenre(e.target.value)} 
+                    className="w-full bg-gray-700 rounded px-2 py-1 text-sm" />
+                </label>
+                
+                <label className="block mb-2">
+                  <span className="text-xs text-gray-400">Charter</span>
+                  <input type="text" value={charter} onChange={e => setCharter(e.target.value)} 
+                    className="w-full bg-gray-700 rounded px-2 py-1 text-sm" />
+                </label>
+                
+                <label className="block mb-2">
+                  <span className="text-xs text-gray-400">Preview Start (sec)</span>
+                  <input type="number" value={previewStart} onChange={e => setPreviewStart(parseFloat(e.target.value) || 0)} 
+                    className="w-full bg-gray-700 rounded px-2 py-1 text-sm" />
+                </label>
+                
+                <label className="block mb-3">
+                  <span className="text-xs text-gray-400">Preview End (sec)</span>
+                  <input type="number" value={previewEnd} onChange={e => setPreviewEnd(parseFloat(e.target.value) || 0)} 
+                    className="w-full bg-gray-700 rounded px-2 py-1 text-sm" />
+                </label>
+                
+                <button onClick={() => setShowMetaEditor(false)} className="w-full py-2 bg-blue-600 rounded">
+                  Done
+                </button>
+              </div>
+            </div>
+          )}
+          
+          {/* Add Chart Modal */}
+          {showAddChart && (
+            <div className="modal-overlay" onClick={() => setShowAddChart(false)}>
+              <div className="bg-gray-800 rounded-lg p-4 m-4 w-full max-w-sm" onClick={e => e.stopPropagation()}>
+                <h2 className="text-lg font-bold mb-3">Add Chart</h2>
+                
+                <div className="mb-3">
+                  <span className="text-xs text-gray-400">Instrument</span>
+                  <div className="flex gap-1 mt-1">
+                    {Object.entries(INSTRUMENTS).map(([key, inst]) => (
+                      <button
+                        key={key}
+                        onClick={() => setCurrentInstrument(key)}
+                        className={`flex-1 py-1 rounded text-xs ${currentInstrument === key ? 'bg-blue-600' : 'bg-gray-700'}`}
+                      >
+                        {inst.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                
+                <div className="mb-3">
+                  <span className="text-xs text-gray-400">Difficulty (tap to create)</span>
+                  <div className="grid grid-cols-2 gap-1 mt-1">
+                    {DIFFICULTIES.map(diff => {
+                      const exists = chartExists(diff, currentInstrument);
+                      return (
+                        <button
+                          key={diff}
+                          onClick={() => !exists && addNewChart(diff, currentInstrument)}
+                          className={`py-1 rounded text-xs ${exists ? 'bg-green-800' : 'bg-gray-700'}`}
+                        >
+                          {diff} {exists ? `✓` : ''}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                
+                {Object.keys(charts).filter(k => charts[k]?.length > 0).length > 0 && (
+                  <div className="mb-3">
+                    <span className="text-xs text-gray-400">Or copy from existing</span>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {Object.keys(charts).filter(k => charts[k]?.length > 0).map(key => (
+                        <button
+                          key={key}
+                          onClick={() => addNewChart(currentDifficulty, currentInstrument, key)}
+                          className="px-2 py-1 bg-purple-700 rounded text-xs"
+                        >
+                          Copy {key}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                <button onClick={() => setShowAddChart(false)} className="w-full py-2 bg-gray-600 rounded text-sm">
                   Close
                 </button>
               </div>
@@ -988,16 +1315,23 @@
           {showEditMenu && (
             <div className="bg-gray-800 border-b border-gray-700 p-2 flex flex-col gap-2">
               <div className="flex items-center gap-2">
-                <button onClick={setSelectionStartHere} className="px-2 py-1 bg-purple-700 rounded text-xs">
-                  Start
+                <button 
+                  onClick={setSelectionStartHere} 
+                  className={`px-2 py-1 rounded text-xs ${isSelectingStart ? 'bg-purple-500' : 'bg-purple-700'}`}
+                >
+                  {isSelectingStart ? 'Setting...' : 'Start'}
                 </button>
-                <button onClick={setSelectionEndHere} className="px-2 py-1 bg-purple-700 rounded text-xs">
+                <button 
+                  onClick={setSelectionEndHere} 
+                  disabled={selectionStart === null}
+                  className="px-2 py-1 bg-purple-700 rounded text-xs disabled:opacity-30"
+                >
                   End
                 </button>
                 <span className="text-xs text-gray-400 flex-1 text-center">
-                  {selectionStart !== null && selectionEnd !== null 
-                    ? `Beat ${Math.floor(Math.min(selectionStart, selectionEnd)/RESOLUTION)}-${Math.floor(Math.max(selectionStart, selectionEnd)/RESOLUTION)}`
-                    : 'No selection'}
+                  {selectionStart !== null && liveSelectionEnd !== null 
+                    ? `Beat ${Math.floor(Math.min(selectionStart, liveSelectionEnd)/RESOLUTION)}-${Math.floor(Math.max(selectionStart, liveSelectionEnd)/RESOLUTION)}`
+                    : selectionStart !== null ? 'Scroll to select...' : 'No selection'}
                 </span>
                 <button onClick={clearSelection} className="px-2 py-1 bg-gray-700 rounded text-xs">
                   Clear
@@ -1009,14 +1343,14 @@
               <div className="flex items-center gap-2">
                 <button 
                   onClick={() => nudgeSelection(-1)}
-                  disabled={selectionStart === null || selectionEnd === null}
+                  disabled={selectionStart === null || liveSelectionEnd === null}
                   className="px-2 py-1 bg-gray-700 rounded text-xs disabled:opacity-30"
                 >
                   ← Nudge
                 </button>
                 <button 
                   onClick={copySelection} 
-                  disabled={selectionStart === null || selectionEnd === null}
+                  disabled={selectionStart === null || liveSelectionEnd === null}
                   className="px-2 py-1 bg-blue-600 rounded text-xs disabled:opacity-30"
                 >
                   Copy
@@ -1030,14 +1364,14 @@
                 </button>
                 <button 
                   onClick={deleteSelection}
-                  disabled={selectionStart === null || selectionEnd === null}
+                  disabled={selectionStart === null || liveSelectionEnd === null}
                   className="px-2 py-1 bg-red-600 rounded text-xs disabled:opacity-30"
                 >
                   Delete
                 </button>
                 <button 
                   onClick={() => nudgeSelection(1)}
-                  disabled={selectionStart === null || selectionEnd === null}
+                  disabled={selectionStart === null || liveSelectionEnd === null}
                   className="px-2 py-1 bg-gray-700 rounded text-xs disabled:opacity-30"
                 >
                   Nudge →
@@ -1062,18 +1396,28 @@
               <button onClick={exportChart} className="px-2 py-1 bg-green-600 rounded text-sm">Export</button>
             </div>
             
-            {/* Row 2: Tempo and grid snap */}
+            {/* Row 2: Instrument and Difficulty selector */}
             <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-400">Tempo:</span>
-              {['section', 'measure', 'beat'].map(type => (
-                <button
-                  key={type}
-                  onClick={() => handleTempoMapTypeChange(type)}
-                  className={`px-1.5 py-0.5 rounded text-xs ${tempoMapType === type ? 'bg-blue-600' : 'bg-gray-700'}`}
-                >
-                  {type.slice(0,3)}
-                </button>
-              ))}
+              <select 
+                value={currentInstrument} 
+                onChange={(e) => setCurrentInstrument(e.target.value)}
+                className="bg-gray-700 rounded px-2 py-0.5 text-xs"
+              >
+                {Object.entries(INSTRUMENTS).map(([key, inst]) => (
+                  <option key={key} value={key}>{inst.name}</option>
+                ))}
+              </select>
+              <select 
+                value={currentDifficulty} 
+                onChange={(e) => setCurrentDifficulty(e.target.value)}
+                className="bg-gray-700 rounded px-2 py-0.5 text-xs"
+              >
+                {DIFFICULTIES.map(diff => (
+                  <option key={diff} value={diff}>
+                    {diff} {chartExists(diff, currentInstrument) ? `(${charts[getChartKey(diff, currentInstrument)]?.length || 0})` : ''}
+                  </option>
+                ))}
+              </select>
               <span className="text-xs text-gray-500">|</span>
               <span className="text-xs text-gray-400">Grid:</span>
               <button
@@ -1215,12 +1559,12 @@
             )}
             
             {/* Selection highlight */}
-            {selectionStart !== null && selectionEnd !== null && (
+            {selectionStart !== null && liveSelectionEnd !== null && (
               <div 
-                className="absolute left-0 right-0 bg-purple-500 opacity-20 pointer-events-none z-5"
+                className="absolute left-0 right-0 bg-purple-500 opacity-30 pointer-events-none z-5"
                 style={{
-                  top: `${getNoteY(Math.max(selectionStart, selectionEnd))}%`,
-                  bottom: `${100 - getNoteY(Math.min(selectionStart, selectionEnd))}%`
+                  top: `${getNoteY(Math.max(selectionStart, liveSelectionEnd))}%`,
+                  bottom: `${100 - getNoteY(Math.min(selectionStart, liveSelectionEnd))}%`
                 }}
               />
             )}
@@ -1250,17 +1594,19 @@
             </div>
             
             {/* Lanes */}
-            {LANE_COLORS.map((color, idx) => (
+            {instrumentConfig.colors.map((color, idx) => (
               <div
                 key={idx}
                 className="flex-1 relative overflow-hidden"
-                style={{ backgroundColor: `${color}08`, borderRight: idx < 4 ? '1px solid #374151' : 'none' }}
+                style={{ backgroundColor: `${color}08`, borderRight: idx < instrumentConfig.lanes - 1 ? '1px solid #374151' : 'none' }}
               >
                 {visibleNotes.filter(n => n.lane === idx).map(note => {
                   const noteY = getNoteY(note.tick);
                   const dur = note.duration || 0;
                   const showSustain = dur > 0;
                   const sustainEndY = showSustain ? getNoteY(note.tick + dur) : noteY;
+                  const isTap = (note.flags || 0) & NoteFlags.TAP;
+                  const isForced = (note.flags || 0) & NoteFlags.FORCED;
                   
                   return (
                     <React.Fragment key={`${note.tick}-${note.lane}`}>
@@ -1279,11 +1625,12 @@
                       <div
                         className="absolute left-1/2 w-10 h-4 rounded-full"
                         style={{
-                          backgroundColor: color,
+                          backgroundColor: isTap || isForced ? 'transparent' : color,
+                          border: isTap ? `3px solid ${color}` : isForced ? `3px dashed ${color}` : 'none',
                           top: `${noteY}%`,
                           transform: 'translate(-50%, -50%)',
-                          boxShadow: `0 0 8px ${color}`,
-                          border: isInSelection(note.tick) ? '2px solid white' : 'none'
+                          boxShadow: isTap || isForced ? 'none' : `0 0 8px ${color}`,
+                          outline: isInSelection(note.tick) ? '2px solid white' : 'none'
                         }}
                       />
                       {showSustain ? (
@@ -1302,6 +1649,43 @@
               </div>
             ))}
             
+            {/* Open notes (purple bar across all lanes) */}
+            {instrumentConfig.hasOpen && visibleNotes.filter(n => n.lane === OPEN_LANE).map(note => {
+              const noteY = getNoteY(note.tick);
+              const dur = note.duration || 0;
+              const showSustain = dur > 0;
+              const sustainEndY = showSustain ? getNoteY(note.tick + dur) : noteY;
+              const isTap = (note.flags || 0) & NoteFlags.TAP;
+              const isForced = (note.flags || 0) & NoteFlags.FORCED;
+              
+              return (
+                <React.Fragment key={`open-${note.tick}`}>
+                  {showSustain ? (
+                    <div
+                      className="absolute left-1/4 right-1/4 rounded-sm z-20 pointer-events-none"
+                      style={{
+                        backgroundColor: '#a855f7',
+                        opacity: 0.7,
+                        top: `${Math.min(noteY, sustainEndY)}%`,
+                        height: `${Math.abs(noteY - sustainEndY)}%`,
+                      }}
+                    />
+                  ) : null}
+                  <div
+                    className="absolute left-4 right-4 h-3 rounded z-20 pointer-events-none"
+                    style={{
+                      backgroundColor: isTap || isForced ? 'transparent' : '#a855f7',
+                      border: isTap ? '3px solid #a855f7' : isForced ? '3px dashed #a855f7' : 'none',
+                      top: `${noteY}%`,
+                      transform: 'translateY(-50%)',
+                      boxShadow: isTap || isForced ? 'none' : '0 0 8px #a855f7',
+                      outline: isInSelection(note.tick) ? '2px solid white' : 'none'
+                    }}
+                  />
+                </React.Fragment>
+              );
+            })}
+            
             {notes.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                 <span className="text-gray-600 text-sm">Swipe to scroll • Tap lanes below</span>
@@ -1314,16 +1698,45 @@
             <span className="text-xs text-gray-400">{notes.length} notes</span>
             {sustainModes.length > 0 && (
               <span className="text-xs text-yellow-400">
-                SUSTAIN: {sustainModes.map(s => LANE_LABELS[s.lane]).join('+')}
+                SUSTAIN: {sustainModes.map(s => s.lane === OPEN_LANE ? 'OPEN' : instrumentConfig.labels[s.lane]).join('+')}
               </span>
             )}
+            {proMode && (tapMode || forceMode) ? (
+              <span className="text-xs text-cyan-400">{tapMode ? 'TAP ' : ''}{forceMode ? 'FORCE' : ''}</span>
+            ) : null}
             {clipboard.length > 0 && <span className="text-xs text-purple-400">📋 {clipboard.length}</span>}
             {lastSaved && <span className="text-xs text-gray-600">saved {lastSaved.toLocaleTimeString()}</span>}
           </div>
           
+          {/* Open note button (Pro Mode only, guitar/bass only) */}
+          {proMode && instrumentConfig.hasOpen && (
+            <div className="flex h-10 flex-shrink-0 border-t border-gray-700">
+              <button
+                className="flex-1 flex items-center justify-center text-lg font-bold active:brightness-75"
+                style={{ backgroundColor: '#a855f7', boxShadow: 'inset 0 -2px 4px rgba(0,0,0,0.3)' }}
+                onClick={toggleOpenNote}
+              >
+                OPEN
+              </button>
+              {instrumentConfig.hasSustain && (
+                <button
+                  className="w-16 flex items-center justify-center text-xs font-bold active:brightness-75"
+                  style={{ 
+                    backgroundColor: sustainModes.some(s => s.lane === OPEN_LANE) ? '#fff' : '#a855f799',
+                    color: sustainModes.some(s => s.lane === OPEN_LANE) ? '#a855f7' : '#fff',
+                    boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.4)'
+                  }}
+                  onClick={() => toggleSustainMode(0, true)}
+                >
+                  {sustainModes.some(s => s.lane === OPEN_LANE) ? '●' : 'SUS'}
+                </button>
+              )}
+            </div>
+          )}
+          
           {/* Lane buttons */}
-          <div className="flex h-20 flex-shrink-0">
-            {LANE_COLORS.map((color, idx) => (
+          <div className={`flex flex-shrink-0 ${proMode ? 'h-24' : 'h-20'}`}>
+            {instrumentConfig.colors.map((color, idx) => (
               <div key={idx} className="flex-1 flex flex-col">
                 {/* Main note button */}
                 <button
@@ -1331,20 +1744,43 @@
                   style={{ backgroundColor: color, boxShadow: 'inset 0 -2px 4px rgba(0,0,0,0.3)' }}
                   onClick={() => toggleNoteAtCurrent(idx)}
                 >
-                  {LANE_LABELS[idx]}
+                  {instrumentConfig.labels[idx]}
                 </button>
-                {/* Sustain zone */}
-                <button
-                  className="h-5 flex items-center justify-center text-xs font-bold active:brightness-75"
-                  style={{ 
-                    backgroundColor: sustainModes.some(s => s.lane === idx) ? '#fff' : `${color}99`,
-                    color: sustainModes.some(s => s.lane === idx) ? color : '#fff',
-                    boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.4)'
-                  }}
-                  onClick={() => toggleSustainMode(idx)}
-                >
-                  {sustainModes.some(s => s.lane === idx) ? '●' : '―'}
-                </button>
+                {/* Bottom row: Sustain (+ Tap/Force in pro mode) */}
+                <div className="flex h-6">
+                  {instrumentConfig.hasSustain && (
+                    <button
+                      className="flex-1 flex items-center justify-center text-xs font-bold active:brightness-75"
+                      style={{ 
+                        backgroundColor: sustainModes.some(s => s.lane === idx) ? '#fff' : `${color}99`,
+                        color: sustainModes.some(s => s.lane === idx) ? color : '#fff',
+                        boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.4)'
+                      }}
+                      onClick={() => toggleSustainMode(idx)}
+                    >
+                      {sustainModes.some(s => s.lane === idx) ? '●' : '―'}
+                    </button>
+                  )}
+                  {proMode && (
+                    <>
+                      <button
+                        className={`flex-1 flex items-center justify-center text-xs font-bold active:brightness-75 ${tapMode ? 'bg-cyan-500' : 'bg-gray-700'}`}
+                        onClick={() => setTapMode(!tapMode)}
+                      >
+                        T
+                      </button>
+                      <button
+                        className={`flex-1 flex items-center justify-center text-xs font-bold active:brightness-75 ${forceMode ? 'bg-orange-500' : 'bg-gray-700'}`}
+                        onClick={() => setForceMode(!forceMode)}
+                      >
+                        F
+                      </button>
+                    </>
+                  )}
+                  {!instrumentConfig.hasSustain && !proMode && (
+                    <div className="flex-1 bg-gray-800" />
+                  )}
+                </div>
               </div>
             ))}
           </div>
