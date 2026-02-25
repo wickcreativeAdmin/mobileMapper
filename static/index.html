@@ -186,6 +186,11 @@
       const [tapMode, setTapMode] = useState(false);
       const [forceMode, setForceMode] = useState(false);
       
+      // Zoom/Hyperspeed state
+      const [showSpeedSettings, setShowSpeedSettings] = useState(false);
+      const [hyperspeed, setHyperspeed] = useState(1.0);  // Multiplier for note spacing
+      const [highwayLength, setHighwayLength] = useState(8);  // Beats visible on screen
+      
       // Note clap state
       const [noteClap, setNoteClap] = useState('off');
       const [lastClappedTick, setLastClappedTick] = useState(-1);
@@ -658,9 +663,14 @@
       
       const currentTick = timeToTick(currentTime);
       const currentBpm = getCurrentBpm();
-      const beatsVisible = 8;
+      // beatsVisible is affected by highwayLength and hyperspeed
+      // Higher hyperspeed = fewer beats visible (notes spread out more)
+      const beatsVisible = highwayLength / hyperspeed;
       const ticksVisible = beatsVisible * RESOLUTION;
       const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+      
+      // Check if speed settings are modified from defaults
+      const speedSettingsActive = hyperspeed !== 1.0 || highwayLength !== 8;
       
       const handleFileSelect = async (e) => {
         const file = e.target.files?.[0];
@@ -1308,7 +1318,7 @@
           }
         });
         
-        const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+        const blob = new Blob([lines.join('\n')], { type: 'application/octet-stream' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -1469,10 +1479,11 @@
               {/* Grid & Tempo */}
               <div className="mb-4">
                 <h3 className="text-xs font-bold text-gray-400 mb-2 uppercase">Grid Snap</h3>
-                <div className="flex gap-1">
+                <div className="flex gap-1 flex-wrap">
                   {[
-                    { val: RESOLUTION, label: '1 beat' },
+                    { val: RESOLUTION, label: '1' },
                     { val: HALF_BEAT, label: '1/2' },
+                    { val: RESOLUTION/3, label: '1/3' },
                     { val: RESOLUTION/4, label: '1/4' },
                   ].map(g => (
                     <button
@@ -1500,7 +1511,7 @@
                     </button>
                   ))}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 mb-2">
                   <span className="text-xs text-gray-400">Clap:</span>
                   <select 
                     value={noteClap} 
@@ -1512,6 +1523,49 @@
                     <option value="medium">Medium</option>
                     <option value="high">High</option>
                   </select>
+                </div>
+              </div>
+              
+              {/* Zoom / Hyperspeed */}
+              <div className="mb-4">
+                <h3 className="text-xs font-bold text-gray-400 mb-2 uppercase">
+                  Zoom / Speed {speedSettingsActive && <span className="text-orange-400">●</span>}
+                </h3>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-400 w-16">Hyper:</span>
+                    <input
+                      type="range"
+                      min="0.5"
+                      max="4"
+                      step="0.25"
+                      value={hyperspeed}
+                      onChange={(e) => setHyperspeed(parseFloat(e.target.value))}
+                      className="flex-1"
+                    />
+                    <span className="text-xs w-8 text-right">{hyperspeed}x</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-400 w-16">Length:</span>
+                    <input
+                      type="range"
+                      min="4"
+                      max="16"
+                      step="1"
+                      value={highwayLength}
+                      onChange={(e) => setHighwayLength(parseInt(e.target.value))}
+                      className="flex-1"
+                    />
+                    <span className="text-xs w-8 text-right">{highwayLength}b</span>
+                  </div>
+                  {speedSettingsActive && (
+                    <button
+                      onClick={() => { setHyperspeed(1.0); setHighwayLength(8); }}
+                      className="w-full py-1 bg-gray-700 rounded text-xs"
+                    >
+                      Reset to Default
+                    </button>
+                  )}
                 </div>
               </div>
               
@@ -2205,6 +2259,12 @@
                 ½
               </button>
               <button
+                onClick={() => setGridSnap(RESOLUTION/3)}
+                className={`px-1.5 py-0.5 rounded text-xs ${gridSnap === RESOLUTION/3 ? 'bg-blue-600' : 'bg-gray-700'}`}
+              >
+                ⅓
+              </button>
+              <button
                 onClick={() => setGridSnap(RESOLUTION/4)}
                 className={`px-1.5 py-0.5 rounded text-xs ${gridSnap === RESOLUTION/4 ? 'bg-blue-600' : 'bg-gray-700'}`}
               >
@@ -2237,8 +2297,61 @@
                   {rate === 1 ? '1x' : `${Math.round(rate*100)}%`}
                 </button>
               ))}
+              <button
+                onClick={() => setShowSpeedSettings(!showSpeedSettings)}
+                className={`px-2 py-1 rounded text-xs ${speedSettingsActive ? 'bg-orange-600' : showSpeedSettings ? 'bg-gray-600' : 'bg-gray-700'}`}
+                title="Zoom / Hyperspeed"
+              >
+                ⏱️
+              </button>
               <span className="text-sm text-yellow-400 ml-auto">{currentBpm} BPM</span>
             </div>
+            
+            {/* Speed settings dropdown */}
+            {showSpeedSettings && (
+              <div className="bg-gray-700 rounded p-2 flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-400 w-20">Hyperspeed:</span>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="4"
+                    step="0.25"
+                    value={hyperspeed}
+                    onChange={(e) => setHyperspeed(parseFloat(e.target.value))}
+                    className="flex-1"
+                  />
+                  <span className="text-xs w-10 text-right">{hyperspeed}x</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-400 w-20">Highway:</span>
+                  <input
+                    type="range"
+                    min="4"
+                    max="16"
+                    step="1"
+                    value={highwayLength}
+                    onChange={(e) => setHighwayLength(parseInt(e.target.value))}
+                    className="flex-1"
+                  />
+                  <span className="text-xs w-10 text-right">{highwayLength} beats</span>
+                </div>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => { setHyperspeed(1.0); setHighwayLength(8); }}
+                    className="flex-1 py-1 bg-gray-600 rounded text-xs"
+                  >
+                    Reset
+                  </button>
+                  <button
+                    onClick={() => setShowSpeedSettings(false)}
+                    className="px-3 py-1 bg-gray-600 rounded text-xs"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            )}
             
             {/* Row 4: Time + progress */}
             <div className="flex items-center gap-2">
